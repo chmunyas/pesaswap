@@ -59,6 +59,10 @@ $RECYCLE.BIN/
 generate_languages.php
 dist
 docs
+# PESASWAP — keep README screenshots committed (they're <8 MB total).
+!docs/
+!docs/screenshots/
+!docs/screenshots/*.png
 /patches
 translations
 /.buildpath
@@ -81,6 +85,9 @@ auth.json
 *.jpg
 *.jpeg
 *.webp
+# PESASWAP — keep PWA icons + README screenshots committed.
+!frontend/public/*.png
+!docs/screenshots/*.png
 *copy*
 /writable/logs/*.log
 /writable/debugbar/*.json

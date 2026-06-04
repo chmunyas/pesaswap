@@ -99,6 +99,9 @@ $routes->group('api', function($routes) {
 
     $routes->post('ai/chat', 'Api\AiController::chat');
 
+    // PUBLIC endpoints — no auth required. Customer-safe data only.
+    $routes->get('public/menu/(:segment)', 'Api\PublicController::menu/$1');
+
     $routes->options('auth/login', 'Api\AuthController::preflight');
     $routes->options('auth/logout', 'Api\AuthController::preflight');
     $routes->options('auth/me', 'Api\AuthController::preflight');
@@ -122,4 +125,5 @@ $routes->group('api', function($routes) {
     $routes->options('item-kits/(:num)', 'Api\ItemKitsController::preflight');
     $routes->options('messages', 'Api\MessagesController::preflight');
     $routes->options('ai/chat', 'Api\AiController::preflight');
+    $routes->options('public/menu/(:segment)', 'Api\PublicController::preflight');
 });

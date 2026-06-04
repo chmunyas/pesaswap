@@ -122,4 +122,15 @@ export const api = {
         body: JSON.stringify({ message }),
       }),
   },
+  /**
+   * Public endpoints — no auth required. Used by customer-facing mobile
+   * pages (/menu/:tableId) and cached aggressively by the PWA service
+   * worker (per-tableId, customer-safe fields only).
+   */
+  public: {
+    menu: (tableId: string) =>
+      request<ApiResponse<{ table_id: string; items: Array<{ item_id: number; name: string; category: string; unit_price: number; description: string; available: boolean }> }>>(
+        `/public/menu/${encodeURIComponent(tableId)}`,
+      ),
+  },
 };

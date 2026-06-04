@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { ThemeProvider } from './hooks/useTheme';
@@ -6,6 +6,10 @@ import { AppLayout } from './components/layout/AppLayout';
 import { ToastContainer } from './components/ui/Toast';
 import { LoginPage } from './pages/LoginPage';
 import { I18nProvider } from './lib/i18n';
+import { InstallPrompt } from './components/pwa/InstallPrompt';
+import { OfflineIndicator } from './components/pwa/OfflineIndicator';
+import { UpdatePrompt } from './components/pwa/UpdatePrompt';
+import { initPwa } from './lib/pwa';
 
 // Lazy-loaded pages — split off the main bundle (named exports wrapped).
 const DashboardPage              = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
@@ -104,6 +108,10 @@ function AppRoutes() {
 }
 
 export default function App() {
+  useEffect(() => {
+    initPwa();
+  }, []);
+
   return (
     <BrowserRouter>
       <ThemeProvider>
@@ -111,6 +119,9 @@ export default function App() {
           <AuthProvider>
             <AppRoutes />
             <ToastContainer />
+            <OfflineIndicator />
+            <InstallPrompt />
+            <UpdatePrompt />
           </AuthProvider>
         </I18nProvider>
       </ThemeProvider>

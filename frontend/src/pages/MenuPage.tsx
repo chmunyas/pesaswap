@@ -23,7 +23,6 @@ import {
 } from '../lib/realtime';
 import { useI18n } from '../lib/i18n';
 import { api } from '../lib/api';
-import type { Item } from '../types';
 
 const MOCK_ITEMS: CatalogueItem[] = [
   { id: 'm-1', name: 'Beef Burger',         category: 'Mains',     price: 850,  description: 'Grilled beef patty, lettuce, tomato, special sauce', dietary: ['halal'] },
@@ -51,17 +50,6 @@ const MOCK_SUGGESTIONS: Record<string, string[]> = {
   'm-4': ['m-3', 'm-11', 'm-8'],
 };
 
-function itemToCatalogue(item: Item, idx: number): CatalogueItem {
-  return {
-    id: String(item.item_id ?? `api-${idx}`),
-    name: item.name || 'Untitled item',
-    category: item.category || 'Mains',
-    price: Number(item.unit_price) || 0,
-    description: item.description || undefined,
-    available: Number(item.quantity ?? 1) > 0,
-  };
-}
-
 export function MenuPage() {
   const { tableId } = useParams<{ tableId: string }>();
   const { t } = useI18n();
@@ -74,15 +62,26 @@ export function MenuPage() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      if (!tableId) return;
       try {
-        const res = await api.items.list(1, 100, '');
-        const apiItems = (res.data?.items ?? []) as Item[];
+        // Use the PUBLIC menu endpoint — works without merchant auth and is
+        // cacheable by the PWA service worker per-tableId.
+        const res = await api.public.menu(tableId);
+        const apiItems = res.data?.items ?? [];
         if (!cancelled && apiItems.length > 0) {
-          setItems(apiItems.map(itemToCatalogue));
+          setItems(
+            apiItems.map((it) => ({
+              id: String(it.item_id),
+              name: it.name,
+              category: it.category || 'Mains',
+              price: it.unit_price,
+              description: it.description || undefined,
+              available: it.available,
+            })),
+          );
           setUsingMock(false);
         }
       } catch {
-        // Public route — auth-protected API may reject. Fall back to mock items.
         if (!cancelled) setUsingMock(true);
       }
     }
@@ -90,7 +89,7 @@ export function MenuPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [tableId]);
 
   const itemMap = useMemo(() => {
     const map = new Map<string, CatalogueItem>();

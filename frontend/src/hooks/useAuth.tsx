@@ -1,5 +1,6 @@
 import { useState, useEffect, createContext, useContext, type ReactNode } from 'react';
 import { api } from '../lib/api';
+import { clearAuthenticatedCaches } from '../lib/pwa';
 import type { User } from '../types';
 
 interface AuthContextType {
@@ -29,8 +30,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await api.auth.logout();
-    setUser(null);
+    try {
+      await api.auth.logout();
+    } finally {
+      // Purge any user-scoped PWA caches so the next session can't briefly
+      // see this user's dashboard/etc. Best-effort, never blocks logout.
+      void clearAuthenticatedCaches();
+      setUser(null);
+    }
   };
 
   return (
