@@ -1,143 +1,281 @@
-<p align="center"><img src="https://raw.githubusercontent.com/opensourcepos/opensourcepos/master/branding/emblem.svg" alt="Open Source Point of Sale Logo" width="auto" height="200"></p>
-<h3 align="center">Open Source Point of Sale</h3>
+<p align="center">
+  <img src="frontend/public/pwa-512.png" alt="PESASWAP" width="120" height="120">
+</p>
+
+<h1 align="center">PESASWAP</h1>
 
 <p align="center">
-  <a href="#-introduction">Introduction</a> · <a href="#-live-demo">Demo</a> · <a href="#-installation">Installation</a> · 
-  <a href="#-contributing">Contributing</a> · <a href="#-reporting-bugs">Bugs</a> · <a href="#-faq">FAQ</a> · 
-  <a href="#-keep-the-machine-running">Donate</a> · <a href="#-license">License</a> · <a href="#-credits">Credits</a>
+  <strong>A modern, mobile-first Point of Sale platform for Africa.</strong><br>
+  Tap & Go QR payments · Kitchen Display · Co-op BNPL · Loyalty · Real-time orders · AI insights · Offline-first PWA
 </p>
 
 <p align="center">
-<a href="https://github.com/opensourcepos/opensourcepos/actions/workflows/build-release.yml" target="_blank"><img src="https://github.com/opensourcepos/opensourcepos/actions/workflows/build-release.yml/badge.svg" alt="Build Status"></a>
-<a href="https://app.gitter.im/#/room/#opensourcepos_Lobby:gitter.im?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge" target="_blank"><img src="https://badges.gitter.im/jekkos/opensourcepos.svg" alt="Join the chat at https://app.gitter.im"></a>
-<a href="https://badge.fury.io/gh/opensourcepos%2Fopensourcepos" target="_blank"><img src="https://badge.fury.io/gh/opensourcepos%2Fopensourcepos.svg" alt="Project Version"></a>
-<a href="https://translate.opensourcepos.org/engage/opensourcepos/?utm_source=widget" target="_blank"><img src="https://translate.opensourcepos.org/widgets/opensourcepos/-/svg-badge.svg" alt="Translation Status"></a>
+  Built on top of <a href="https://github.com/opensourcepos/opensourcepos">Open Source Point of Sale</a> ·
+  React 19 · Vite 8 · Tailwind 4 · TypeScript · PHP 8.2 · CodeIgniter 4 · MariaDB
 </p>
 
-## 👋 Introduction
+<p align="center">
+  <a href="#-screenshots">Screenshots</a> ·
+  <a href="#-features">Features</a> ·
+  <a href="#-quick-start">Quick start</a> ·
+  <a href="#-architecture">Architecture</a> ·
+  <a href="#-credits">Credits</a>
+</p>
 
-Open Source Point of Sale is a web-based point of sale system. The application is written in PHP, uses MySQL (or MariaDB) as the data storage back-end, and has a simple but intuitive user interface.
+---
 
-The latest `3.4` version is a complete overhaul of the original software. It uses CodeIgniter 4 as a framework and is based on Bootstrap 3 using Bootswatch themes. Along with improved functionality and security.
+## ✨ Why PESASWAP?
 
-The features include:
+PESASWAP takes the proven OSPOS PHP backend (sales, customers, items, employees, gift cards, tax, reporting — battle-tested over a decade) and pairs it with a brand-new mobile-first React frontend purpose-built for African retail and hospitality:
 
-- Stock management (items and kits with an extensible list of attributes)
-- VAT, GST, customer, and multi tiers taxation
-- Sale register with transactions logging
-- Quotation and invoicing
-- Expenses logging
-- Cash up function
-- Printing and emailing of receipts, invoices and quotations
-- Barcode generation and printing
-- Database of customers and suppliers
-- Multiuser with permission control
-- Reporting on sales, orders, expenses, inventory status and more
-- Receivings
-- Gift cards
-- Rewards
-- Restaurant tables
-- Messaging (SMS)
-- Multilanguage
-- Selectable Bootstrap based UI theme with Bootswatch
-- MailChimp integration
-- Optional Google reCAPTCHA to protect the login page from brute force attacks
-- GDPR ready
+- 📱 **Customer scans, customer pays.** Tap & Go QR flow from scan → PIN/biometric → "ka-ching" in under 8 seconds.
+- 🍳 **Real-time Kitchen Display.** Orders flow from customer's phone → KDS bell + visual ticket. Bar-only display via `/bar`.
+- 🚨 **Walkout alerts.** Tables open > 2h with no payment auto-flag for staff intervention.
+- 💳 **Co-op Bank BNPL.** National ID → eligibility → OTP → installment plan, all in the same `/pay` flow.
+- 🎯 **Loyalty tiers.** Bronze/Silver/Gold/Platinum auto-computed from lifetime spend, displayed inline.
+- 🤖 **Proactive AI insights.** Revenue forecast, peak hour, anomaly detection, churn risk — without an LLM bill.
+- 🌍 **3 languages.** English, Kiswahili, French (navigator.language autodetect).
+- 🔌 **Offline-first PWA.** Installable on iOS & Android. `/menu/:tableId` works without network after first visit.
+- 📅 **Reservations.** Today / Upcoming / Past sections with seat / no-show / cancel actions.
+- 💱 **FX converter.** 7 currencies, 5 providers, best-rate selection (demo rates).
 
-## 🧪 Live Demo
+---
 
-We've got a live version of our latest master running for you to play around with and test everything out. It's a containerized install that will reinitialize when new functionality is merged into our code repository.
+## 📸 Screenshots
 
-You can [find the demo here](https://demo.opensourcepos.org/) and log in with these credentials.  
-👤 Username `admin`  
-🔒 Password `pointofsale`
+### Desktop (back-office)
 
-If you bump into an issue, please check [the status page here](https://status.opensourcepos.org/) to confirm if the server is up and running.
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/02-dashboard.png" alt="Dashboard with AI insight" width="100%"><br><sub><b>Dashboard</b> — sales/revenue snapshot with proactive AI insight</sub></td>
+    <td align="center"><img src="docs/screenshots/04-kds.png" alt="Kitchen Display with walkout alert" width="100%"><br><sub><b>Kitchen Display</b> — live order queue + walkout-risk banner</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/05-customers.png" alt="Customers with loyalty tiers" width="100%"><br><sub><b>Customers</b> — Bronze/Silver/Gold/Platinum tier badges</sub></td>
+    <td align="center"><img src="docs/screenshots/06-reservations.png" alt="Reservations" width="100%"><br><sub><b>Reservations</b> — today/upcoming/past with status actions</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/08-fx.png" alt="FX Converter" width="100%"><br><sub><b>FX Converter</b> — multi-currency + provider best-rate</sub></td>
+    <td align="center"><img src="docs/screenshots/09-payment-summary.png" alt="Payment method summary" width="100%"><br><sub><b>Payment Summary</b> — per-method breakdown, 7-day trend</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/10-ai-insights.png" alt="AI insights cards" width="100%"><br><sub><b>AI Assistant</b> — forecast, peak hour, anomaly, churn cards + chat</sub></td>
+    <td align="center"><img src="docs/screenshots/11-qr-hub.png" alt="QR Hub" width="100%"><br><sub><b>QR Hub</b> — generate QR codes for tables, invoices, payments</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/07-invoices.png" alt="Invoice creator" width="100%"><br><sub><b>Invoices</b> — multi-currency invoice creator with FX</sub></td>
+    <td align="center"><img src="docs/screenshots/12-mobile-preview.png" alt="Mobile preview" width="100%"><br><sub><b>Mobile Preview</b> — desktop demo of public pages in a phone frame</sub></td>
+  </tr>
+</table>
 
-## 🖥️ Development Demo
+### Mobile (customer-facing, public, PWA-installable)
 
-Besides the demo of the latest master, we also have a development server that builds when there's a new commit to our repository. It's mainly used for testing out new code before merging it into the master. [It can be found here](https://dev.opensourcepos.org/).
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/20-pay-scanned.png" alt="Tap & Go pay" width="100%"><br><sub><b>/pay</b> — Tap & Go scan flow</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/21-menu.png" alt="Customer menu" width="100%"><br><sub><b>/menu/:tableId</b> — browse menu, add to cart, send to kitchen</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/23-table-bill.png" alt="Table bill" width="100%"><br><sub><b>/t/:tableId</b> — split, tip, pay your bill</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/22-reset-pin.png" alt="Reset PIN" width="100%"><br><sub><b>/reset-pin</b> — SMS code → new PIN</sub></td>
+  </tr>
+</table>
 
-The log in credentials are the same as the regular live demo.
+---
 
-## 💾 Installation
+## 🚀 Quick start
 
-Please **refrain from creating issues** about installation problems before having read the FAQ and going through existing GitHub issues. We have a build pipeline that checks the sanity of our latest repository commit, and in case the application itself is broken then our build will be as well.
+```bash
+git clone https://github.com/chmunyas/pesaswap.git
+cd pesaswap
 
-This application can be set up in _many_ different ways and we only support the ones described in [the INSTALL.md file](INSTALL.md).
+# 1. Backend (PHP/CodeIgniter via Docker) — composer runs automatically on first boot
+export USERID=$(id -u) GROUPID=$(id -g)
+docker compose -f docker-compose.dev.yml up -d
 
-For more information and recommendations on support hardware, like receipt printers and barcode scanners, read [this page](https://github.com/opensourcepos/opensourcepos/wiki/Supported-hardware-datasheet) on our wiki.
+# 2. Frontend (Vite dev server with /api proxy → :80)
+cd frontend
+npm install
+npm run dev
 
-## ✨ Contributing
+# 3. Open http://localhost:5173 and sign in as
+#    Username: admin   Password: PointOfSale
+```
 
-Everyone is more than welcome to help us improve this project. If you think you've got something to help us go forward, feel free to open a [pull request]() or join the conversation on [Element](https://app.gitter.im/#/room/#opensourcepos_Lobby:gitter.im).
+The Vite dev server proxies `/api/*` to the OSPOS backend at `http://localhost:80`, so login, customers, sales — everything works out of the box.
 
-Want to help translate Open Source Point of Sale in your language? You can find [our Weblate here](https://translate.opensourcepos.org), sign up, and start translating. You can subscribe to different languages to receive a notification once a new string is added or needs updating. Have a look at our [guidelines](https://github.com/opensourcepos/opensourcepos/wiki/Adding-translations) below to help you get started.
+### Demo flow (under 30 seconds)
 
-Only with the help of the community, we can keep language translations up to date. Thanks!
+1. Sign in as `admin` / `PointOfSale`.
+2. Open `/kds` in one tab (Kitchen Display).
+3. Open `/menu/5` in another tab — a customer at Table 5.
+4. Add a burger and a Tusker, tap **Send to kitchen** — the KDS tab beeps and shows the ticket instantly.
 
-## 🐛 Reporting Bugs
+For the BNPL flow: go to `/pay`, click the demo scanner, then **Pay later with Co-op Bank**. Use National ID `12345678`, OTP `1234`.
 
-Before creating a new issue, you'll need copy and include the info under the `System Info` tab in the configuration section in most cases. If that information is not provided in full, your issue might be tagged as pending.
+---
 
-If you're reporting a potential security issue, please refer to our security policy found in the [SECURITY.md](SECURITY.md) file.
+## ✨ Features
 
-NOTE: If you're running non-release code, please make sure you always run the latest database upgrade script and download the latest master code.
+### Customer-facing (public, no auth, PWA installable)
 
-## 📖 FAQ
+| Route | What it does |
+|-------|-------------|
+| `/pay` | Tap & Go QR scan → phone → PIN/biometric → success. Or "Pay later" → Co-op BNPL. |
+| `/menu/:tableId` | Browse the venue menu, add items, send order to kitchen. Works offline. |
+| `/t/:tableId` | View your table bill — split, tip, pay, or "Send order to kitchen". |
+| `/reset-pin` | 6-digit SMS code → new 4-digit PIN. |
+| `/preview/*` | Desktop demo: any public mobile route inside a phone frame. |
 
-- If you get the message `system folder missing`, then you have cloned the source using git and you need to run a build first. Check [INSTALL.md](INSTALL.md) for instructions or download latest zip file from [GitHub releases](https://github.com/opensourcepos/opensourcepos/releases) instead.
+### Back-office (authenticated)
 
-- If at login time you read `The installation is not correct, check your php.ini file.`, please check the error_log in `public` folder to understand what's wrong and make sure you read the [INSTALL.md](INSTALL.md). To know how to enable `error_log`, please read the comment in [issue #1770](https://github.com/opensourcepos/opensourcepos/issues/1770#issuecomment-355177943).
+| Group | Routes |
+|-------|--------|
+| **Main** | Dashboard · POS · Sales · Items · Item Kits · Customers · Suppliers · Receivings · Gift Cards · QR Codes · Kitchen Display · Bar Display · Reservations |
+| **Office** | Invoices · Payment Summary · FX Converter · Expenses · Cashups · Reports · Messages · Settings |
+| **AI** | Mobile Preview · AI Assistant |
 
-- If you installed your OSPOS under a web server subdir, please edit `public/.htaccess` and go to the lines with the comments `if in web root` or `if in subdir`, uncomment one and replace `<OSPOS path>` with your path, and follow the instruction on the second comment line. If you face more issues, please read [issue #920](https://github.com/opensourcepos/opensourcepos/issues/920) for more information.
+### Realtime + i18n + audio
 
-- Apache server configurations are SysAdmin issues and not strictly related to OSPOS. Please make sure you can show a "Hello world" HTML page before pointing to OSPOS public directory. Make sure `.htaccess` is correctly configured.
+- **BroadcastChannel order bus** — `submitNewOrder()` from any tab fans out to all KDS tabs in the same browser. Cross-device requires WebSocket/SSE (out of scope; future Tier 4).
+- **Audio cues** — ka-ching on payment success, beep on new kitchen order, urgent triple-beep on walkout alert.
+- **i18n** — `useI18n()` provider, EN/SW/FR strings, footer language toggle.
 
-- If the avatar pictures are not shown in items or at item save you get an error, please make sure your `writable` and subdirs are assigned to the correct owner and the access permission is set to `750`.
+### PWA
 
-- If you install OSPOS in Docker behind a proxy that performs `ssloffloading`, you can enable the URL generated to be HTTPS instead of HTTP, by activating the environment variable `FORCE_HTTPS = 1`.
+- **`registerType: 'prompt'`** — busy POS/KDS shifts choose when to apply a new SW version (no silent updates mid-transaction).
+- **Workbox precache** — all 28 lazy chunks + CSS + manifest + icons (~1.1 MB). Means `/menu/:tableId`, `/`, `/login`, `/pay`, `/reset-pin` all render fully offline after one warm visit.
+- **Runtime caching** — `/api/public/menu/*` (1h NetworkFirst, 200s only) and `/api/dashboard/stats` (5min NetworkFirst, 200s only). Authenticated caches are purged on logout (`clearAuthenticatedCaches()`).
+- **iOS + Android install** — `beforeinstallprompt` for Chromium; "Tap Share → Add to Home Screen" instructions for iOS Safari.
+- **Maskable icon** — 512×512 with ~20% safe-zone padding so Android doesn't crop the mark.
 
-- If you install OSPOS behind a proxy and OSPOS constantly drops your session, consider whitelisting the proxy IP address by setting `public array $proxyIPs = [];` in the [main PHP config file](https://github.com/opensourcepos/opensourcepos/blob/master/app/Config/App.php).
+Verified offline by automated smoke test (`scripts/pwa-offline-test.mjs`): all 5 critical routes render after `setOffline(true)`.
 
-- If you have suhosin installed and face an issue with CSRF, please make sure you read [issue #1492](https://github.com/opensourcepos/opensourcepos/issues/1492).
+---
 
-- PHP `≥ 8.2` is required to run this app.
+## 🏗 Architecture
 
-## 🏃 Keep the Machine Running
+```
+chmunyas/pesaswap
+├── app/                      # CodeIgniter 4 — preserved from upstream OSPOS
+│   ├── Controllers/Api/      # NEW — 18 JSON API controllers
+│   │   ├── BaseApiController.php       # shared auth + JSON envelope + CORS
+│   │   ├── AuthController.php          # session-cookie login/logout/me
+│   │   ├── PublicController.php        # NEW — customer-safe /api/public/menu/:tableId
+│   │   ├── DashboardController.php
+│   │   ├── ItemsController.php / CustomersController.php / ...
+│   │   └── ...
+│   ├── Config/Routes.php     # /api/* group mounted
+│   ├── Config/Filters.php    # CSRF bypassed for /api/* (session-cookie + CORS)
+│   └── Models/               # preserved from OSPOS (Sale, Customer, Item, ...)
+│
+├── frontend/                 # NEW — React 19 + Vite 8 + Tailwind 4 SPA
+│   ├── src/
+│   │   ├── App.tsx           # all routes lazy-loaded, PWA prompts mounted
+│   │   ├── pages/            # 28 page components (lazy)
+│   │   ├── components/
+│   │   │   ├── ai/InsightsCards.tsx          # forecast/peak/anomaly/churn
+│   │   │   ├── bnpl/BnplCheckout.tsx         # Co-op Bank BNPL
+│   │   │   ├── menu/CustomerMenuList.tsx     # customer-facing menu
+│   │   │   ├── pwa/InstallPrompt.tsx         # iOS + Android install
+│   │   │   ├── pwa/OfflineIndicator.tsx
+│   │   │   ├── pwa/UpdatePrompt.tsx
+│   │   │   ├── dev/PhoneFrame.tsx            # /preview/:path
+│   │   │   └── layout/, ui/, qr/, pos/, dashboard/
+│   │   ├── lib/
+│   │   │   ├── api.ts        # typed fetch wrapper, credentials: include
+│   │   │   ├── realtime.ts   # BroadcastChannel bus + audio cues
+│   │   │   ├── i18n.tsx      # EN/SW/FR provider
+│   │   │   ├── loyalty.ts    # Bronze/Silver/Gold/Platinum
+│   │   │   ├── coop-bnpl.ts  # mock BNPL backend (localStorage)
+│   │   │   ├── walkout.ts    # walkout-risk evaluator + persistence
+│   │   │   ├── pwa.ts        # SW registration + cache management
+│   │   │   └── utils.ts
+│   │   ├── hooks/            # useAuth, useTheme, useIsMobile
+│   │   └── types/
+│   ├── public/               # PWA icons (192/512/maskable + apple-touch)
+│   ├── scripts/generate-icons.mjs       # programmatic icon generation
+│   └── vite.config.ts        # vite-plugin-pwa + Workbox config
+│
+├── docker/dev-entrypoint.sh  # NEW — auto-`composer install` on first boot
+├── Dockerfile                # MODIFIED — bakes composer install
+├── docker-compose.dev.yml    # MariaDB + ospos_dev (port 80)
+└── docs/screenshots/         # this README's images
+```
 
-If you like our project, please consider buying us a coffee through the button below so we can keep adding features. Please star the project if you like it!
+### Why this split
 
-[![Donate](https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MUN6AEG7NY6H8)\
-Or refer to the [FUNDING.yml](.github/FUNDING.yml) file.
+- **OSPOS PHP models stay as-is.** Battle-tested, supports MySQL/MariaDB migrations, has a decade of bug fixes around tax/reporting/sales. We don't reinvent any of that.
+- **Thin JSON API layer.** 18 controllers under `App\Controllers\Api\`. Session-cookie auth (no JWT to manage). Response envelope `{success, data, message}`.
+- **React SPA on top.** Mobile-first by default. Public routes (`/pay`, `/menu/:tableId`, `/t/:tableId`, `/reset-pin`) live outside the auth gate so customers can use them via QR scan.
+- **PWA where it counts.** The customer menu MUST work offline (poor connectivity is normal at table 7); the merchant dashboard SHOULD work briefly offline (network hiccups during service).
 
-If you choose to deploy OSPOS in the cloud, you can contribute to the project by using DigitalOcean and signing up through our referral link. You'll receive a [free $200, 60-day credit](https://m.do.co/c/ac38c262507b) if you run OSPOS in a DigitalOcean droplet through [our referral link](https://m.do.co/c/ac38c262507b).
+---
 
-## 📄 License
+## 🧪 Development
 
-Open Source Point of Sale is licensed under MIT terms with an important addition:
+```bash
+# Frontend
+cd frontend
+npm run dev          # Vite dev server on :5173, proxies /api to :80
+npm run build        # Production build with PWA service worker
+npm run preview      # Preview the production build on :4173
+npm run lint         # ESLint
+npx tsc -b --noEmit  # TypeScript check
 
-The footer signature "© 2010 - _current year_ · opensourcepos.org · 3.x.x - _hash_" including the version, hash and link to our website MUST BE RETAINED, MUST BE VISIBLE IN EVERY PAGE and CANNOT BE MODIFIED.
+# Re-generate PWA icons (if you change the brand colors / mark)
+node scripts/generate-icons.mjs
 
-Also worth noting:
+# Backend
+docker compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml logs -f ospos_dev
+docker exec ospos_dev composer test    # PHPUnit (when present)
+docker exec ospos_dev composer install # if you need to rerun composer
+```
 
-_The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software._
+### Demo data
 
-For more details please read the [LICENSE](LICENSE) file.
+The first time the dev container starts, the entrypoint runs `composer install` (this takes ~60s). Once vendor/ exists on the host bind-mount, subsequent container restarts skip the install. The MariaDB volume persists; default OSPOS demo data is loaded on first migration.
 
-It's important to understand that although you are free to use the application, the copyright has to stay and the license agreement applies in all cases. Therefore, any actions like:
+To reset to demo data:
+```bash
+docker compose -f docker-compose.dev.yml down -v
+docker compose -f docker-compose.dev.yml up -d
+```
 
-- Removing LICENSE and/or any license files is prohibited
-- Authoring the footer notice replacing it with your own or even worse claiming the copyright is absolutely prohibited
-- Claiming full ownership of the code is prohibited
+---
 
-In short, you are free to use the application, but you cannot claim any property on it.
+## 🛡 Known limitations
 
-Any person or company found breaching the license agreement might find a bunch of monkeys at the door ready to destroy their servers.
+- **Real-time KDS is per-browser-profile.** The `BroadcastChannel` order bus is in-browser only. Cross-device live orders need a backend WebSocket/SSE layer — planned for Tier 4.
+- **BNPL is a client-side mock.** No real Co-op Bank API integration; eligibility/OTP/transactions live in localStorage (`pesaswap.bnpl.*`).
+- **AI insights are heuristics, not LLM.** Revenue forecast = trailing 7-day average × drift; peak hour = today's sales bucketed by hour; anomaly = today vs baseline ±25%; churn = customers with `last_visit > 30d ago`. No external AI call.
+- **FX rates are static demo data.** Marked "Demo rates · not live quotes" in the UI.
+- **Payment Method Summary is NOT bank reconciliation.** It groups OSPOS sales by `payment_type` — true reconciliation needs M-Pesa/Airtel/KCB statement imports.
+- **Reservations storage is per-device.** localStorage only; no backend table yet (OSPOS doesn't ship one).
+- **PIN reset never persists the PIN.** It's a demo flow; only a benign reset counter is stored.
+- **Public `/api/public/menu/:tableId`** returns the same item catalogue regardless of `tableId` in this v1. Multi-tenant scoping would resolve tableId → merchant_id and filter accordingly.
+
+---
 
 ## 🙏 Credits
 
-| <div align="center">DigitalOcean</div> | <div align="center">JetBrains</div> | <div align="center">GitHub</div> |
-| --- | --- | --- |
-| <div align="center"><a href="https://www.digitalocean.com?utm_medium=opensource&utm_source=opensourcepos" target="_blank"><img src="https://github.com/user-attachments/assets/fbbf7433-ed35-407d-8946-fd03d236d350" alt="DigitalOcean Logo" height="50"></a></div> | <div align="center"><a href="https://www.jetbrains.com/idea/" target="_blank"><img src="https://github.com/opensourcepos/opensourcepos/assets/12870258/187f9bbe-4484-475c-9b58-5e5d5f931f09" alt="IntelliJ IDEA Logo" height="50"></a></div> | <div align="center"><a href="https://github.com/features/actions" target="_blank"><img src="https://github.githubassets.com/images/modules/site/icons/eyebrow-panel/actions-icon.svg" alt="GitHub Actions Logo" height="50"></a></div> |
-| Many thanks to [DigitalOcean](https://www.digitalocean.com) for providing the project with hosting credits. | Many thanks to [JetBrains](https://www.jetbrains.com/) for providing a free license of [IntelliJ IDEA](https://www.jetbrains.com/idea/) to kindly support the development of OSPOS. | Many thanks to [GitHub](https://github.com) for providing free continuous integration via GitHub Actions for open-source projects. |
+PESASWAP stands on the shoulders of giants:
+
+- **[Open Source Point of Sale (OSPOS)](https://github.com/opensourcepos/opensourcepos)** — the entire PHP/CodeIgniter backend, models, schema, and business logic. PESASWAP is a frontend modernization + thin API layer over OSPOS, not a from-scratch rewrite. Huge thanks to the OSPOS maintainers (Jekkos and contributors) for a decade of work.
+- **[chmunyas/merchantApp](https://github.com/chmunyas/merchantApp)** — patterns adapted (with attribution in source files) for: BroadcastChannel order bus, audio cues, i18n provider, BNPL flow + `coop-bnpl.ts`, `CustomerMenuList`, `AIInsightsView` 4-card layout, `WalletReconciliationView` styling, `PhoneFrame`, `QuickExchange`, `ProviderComparison`.
+- **[shadcn/ui](https://ui.shadcn.com/)** — design patterns borrowed; PESASWAP uses plain Tailwind primitives instead of shadcn components to keep the dependency footprint small.
+- **[Lucide](https://lucide.dev/)** — every icon you see.
+- **[Recharts](https://recharts.org/)** — dashboard charting.
+
+The original upstream OSPOS README is preserved at [`README.ospos.md`](README.ospos.md).
+
+---
+
+## 📜 License
+
+This project inherits the **GPL-3.0** license from upstream OSPOS. See [`LICENSE`](LICENSE).
+
+---
+
+<p align="center">
+  <sub>Built with 🇰🇪 in mind. Modern Africa deserves modern POS.</sub>
+</p>
