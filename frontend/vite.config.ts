@@ -67,6 +67,15 @@ export default defineConfig({
             handler: 'NetworkOnly',
             options: { cacheName: 'pesaswap-public-giftcards' },
           },
+          // PUBLIC ticket lookup — NEVER cache for the same reason: stale
+          // ticket status at the gate would create disputes. The page itself
+          // keeps a defensive localStorage cache for offline display, but
+          // never via the SW (so we never serve stale 200s as "fresh").
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/public/tickets/'),
+            handler: 'NetworkOnly',
+            options: { cacheName: 'pesaswap-public-tickets' },
+          },
           // Dashboard stats — authenticated; cache briefly so refresh-on-load
           // is instant. UI shows "last updated" so staleness is visible.
           // 200s only; purged on logout via clearAuthenticatedCaches().

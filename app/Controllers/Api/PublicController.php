@@ -79,4 +79,18 @@ class PublicController extends BaseApiController
         $gc->initController($this->request, $this->response, service('logger'));
         return $gc->publicBalance($code);
     }
+
+    /**
+     * GET /api/public/tickets/:code
+     *
+     * Customer-facing ticket lookup (delegates to TicketsController). Uses
+     * the short human-readable ticket code, NOT the JWT — the JWT stays
+     * inside the QR payload so it doesn't leak via URL logs.
+     */
+    public function ticketLookup(string $code): ResponseInterface
+    {
+        $tk = new TicketsController();
+        $tk->initController($this->request, $this->response, service('logger'));
+        return $tk->publicLookup($code);
+    }
 }

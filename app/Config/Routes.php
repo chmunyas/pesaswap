@@ -112,9 +112,25 @@ $routes->group('api', function($routes) {
 
     $routes->post('ai/chat', 'Api\AiController::chat');
 
+    // Tickets — Phase 1 API
+    $routes->get('ticket-products', 'Api\TicketsController::productIndex');
+    $routes->get('ticket-products/(:num)', 'Api\TicketsController::productShow/$1');
+    $routes->post('ticket-products', 'Api\TicketsController::productCreate');
+    $routes->put('ticket-products/(:num)', 'Api\TicketsController::productUpdate/$1');
+    $routes->delete('ticket-products/(:num)', 'Api\TicketsController::productDelete/$1');
+
+    $routes->get('tickets', 'Api\TicketsController::ticketIndex');
+    $routes->get('tickets/(:num)', 'Api\TicketsController::ticketShow/$1');
+    $routes->post('tickets', 'Api\TicketsController::ticketIssue');
+    $routes->post('tickets/redeem', 'Api\TicketsController::ticketRedeem');
+    $routes->post('tickets/(:num)/revoke', 'Api\TicketsController::ticketRevoke/$1');
+    $routes->post('tickets/(:num)/refund', 'Api\TicketsController::ticketRefund/$1');
+    $routes->get('tickets/(:num)/qr', 'Api\TicketsController::ticketQr/$1');
+
     // PUBLIC endpoints — no auth required. Customer-safe data only.
     $routes->get('public/menu/(:segment)', 'Api\PublicController::menu/$1');
     $routes->get('public/giftcards/balance/(:segment)', 'Api\PublicController::giftcardBalance/$1');
+    $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
 
     $routes->options('auth/login', 'Api\AuthController::preflight');
     $routes->options('auth/logout', 'Api\AuthController::preflight');
@@ -142,4 +158,11 @@ $routes->group('api', function($routes) {
     $routes->options('messages', 'Api\MessagesController::preflight');
     $routes->options('ai/chat', 'Api\AiController::preflight');
     $routes->options('public/menu/(:segment)', 'Api\PublicController::preflight');
+    $routes->options('ticket-products', 'Api\TicketsController::preflight');
+    $routes->options('ticket-products/(:num)', 'Api\TicketsController::preflight');
+    $routes->options('tickets', 'Api\TicketsController::preflight');
+    $routes->options('tickets/(:num)', 'Api\TicketsController::preflight');
+    $routes->options('tickets/(:num)/(:any)', 'Api\TicketsController::preflight');
+    $routes->options('tickets/redeem', 'Api\TicketsController::preflight');
+    $routes->options('public/tickets/(:segment)', 'Api\PublicController::preflight');
 });

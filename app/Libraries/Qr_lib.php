@@ -4,7 +4,8 @@ namespace App\Libraries;
 
 use chillerlan\QRCode\Common\EccLevel;
 use chillerlan\QRCode\Common\Version;
-use chillerlan\QRCode\Output\QROutputInterface;
+use chillerlan\QRCode\Output\QRGdImagePNG;
+use chillerlan\QRCode\Output\QRMarkupSVG;
 use chillerlan\QRCode\QRCode;
 use chillerlan\QRCode\QROptions;
 use Config\OSPOS;
@@ -17,8 +18,9 @@ use RuntimeException;
  * inline SVG (receipts, invoices, barcode sheets) can render a QR with one
  * call. Output is SVG by default to keep dompdf and print previews crisp.
  *
- * Requires chillerlan/php-qrcode (see composer.json). Run `composer install`
- * after this file is added.
+ * Requires chillerlan/php-qrcode v6 (see composer.json). v6 replaced the
+ * `outputType` enum with an `outputInterface` FQCN string — we point at
+ * QRMarkupSVG::class / QRGdImagePNG::class explicitly.
  */
 class Qr_lib
 {
@@ -75,7 +77,7 @@ class Qr_lib
     {
         $this->assertDependency();
 
-        $options = $this->build_options($overrides, QROutputInterface::MARKUP_SVG, false);
+        $options = $this->build_options($overrides, QRMarkupSVG::class, false);
 
         return (new QRCode($options))->render($data);
     }
@@ -90,12 +92,12 @@ class Qr_lib
     {
         $this->assertDependency();
 
-        $type = match ($format) {
-            'png'   => QROutputInterface::GDIMAGE_PNG,
-            default => QROutputInterface::MARKUP_SVG,
+        $interface = match ($format) {
+            'png'   => QRGdImagePNG::class,
+            default => QRMarkupSVG::class,
         };
 
-        $options = $this->build_options($overrides, $type, true);
+        $options = $this->build_options($overrides, $interface, true);
 
         return (new QRCode($options))->render($data);
     }
@@ -113,12 +115,12 @@ class Qr_lib
             throw new RuntimeException('ext-gd is required for PNG QR output. Use generate_svg() instead.');
         }
 
-        $options = $this->build_options($overrides, QROutputInterface::GDIMAGE_PNG, false);
+        $options = $this->build_options($overrides, QRGdImagePNG::class, false);
 
         return (new QRCode($options))->render($data);
     }
 
-    private function build_options(array $overrides, string $outputType, bool $base64): QROptions
+    private function build_options(array $overrides, string $outputInterface, bool $base64): QROptions
     {
         $defaults = $this->get_qr_config();
 
@@ -126,13 +128,13 @@ class Qr_lib
         $eccConst = self::SUPPORTED_ECC_LEVELS[$eccCode] ?? EccLevel::M;
 
         return new QROptions([
-            'outputType'    => $outputType,
-            'outputBase64'  => $base64,
-            'eccLevel'      => $eccConst,
-            'scale'         => (int) ($overrides['scale']  ?? $defaults['scale']),
-            'addQuietzone'  => true,
-            'quietzoneSize' => (int) ($overrides['margin'] ?? $defaults['margin']),
-            'version'       => Version::AUTO,
+            'outputInterface' => $outputInterface,
+            'outputBase64'    => $base64,
+            'eccLevel'        => $eccConst,
+            'scale'           => (int) ($overrides['scale']  ?? $defaults['scale']),
+            'addQuietzone'    => true,
+            'quietzoneSize'   => (int) ($overrides['margin'] ?? $defaults['margin']),
+            'version'         => Version::AUTO,
         ]);
     }
 

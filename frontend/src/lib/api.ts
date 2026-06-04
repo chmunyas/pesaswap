@@ -172,4 +172,38 @@ export const api = {
         `/public/menu/${encodeURIComponent(tableId)}`,
       ),
   },
+  tickets: {
+    products: {
+      list: (page = 1, limit = 50, search = '', subtype = '') =>
+        request<ApiResponse<EntityPayload>>(
+          `/ticket-products?limit=${limit}&offset=${(page - 1) * limit}&search=${encodeURIComponent(search)}&subtype=${encodeURIComponent(subtype)}`,
+        ),
+      get: (id: number) =>
+        request<ApiResponse<EntityPayload>>(`/ticket-products/${id}`),
+      create: (data: ApiData) =>
+        request<ApiResponse<EntityPayload>>('/ticket-products', { method: 'POST', body: JSON.stringify(data) }),
+      update: (id: number, data: ApiData) =>
+        request<ApiResponse<EntityPayload>>(`/ticket-products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+      delete: (id: number) =>
+        request<ApiResponse<EntityPayload>>(`/ticket-products/${id}`, { method: 'DELETE' }),
+    },
+    list: (page = 1, limit = 50, productId = 0, status = '', customerId = 0) =>
+      request<ApiResponse<EntityPayload>>(
+        `/tickets?limit=${limit}&offset=${(page - 1) * limit}&ticket_product_id=${productId}&status=${encodeURIComponent(status)}&customer_id=${customerId}`,
+      ),
+    get: (id: number) =>
+      request<ApiResponse<EntityPayload>>(`/tickets/${id}`),
+    issue: (data: ApiData) =>
+      request<ApiResponse<EntityPayload>>('/tickets', { method: 'POST', body: JSON.stringify(data) }),
+    redeem: (data: ApiData) =>
+      request<ApiResponse<EntityPayload>>('/tickets/redeem', { method: 'POST', body: JSON.stringify(data) }),
+    revoke: (id: number, data: ApiData) =>
+      request<ApiResponse<EntityPayload>>(`/tickets/${id}/revoke`, { method: 'POST', body: JSON.stringify(data) }),
+    refund: (id: number, data: ApiData) =>
+      request<ApiResponse<EntityPayload>>(`/tickets/${id}/refund`, { method: 'POST', body: JSON.stringify(data) }),
+    qr: (id: number) =>
+      request<ApiResponse<EntityPayload>>(`/tickets/${id}/qr`),
+    publicLookup: (code: string) =>
+      request<ApiResponse<EntityPayload>>(`/public/tickets/${encodeURIComponent(code)}`),
+  },
 };

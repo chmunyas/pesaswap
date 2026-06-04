@@ -40,6 +40,8 @@ const FxPage                     = lazy(() => import('./pages/FxPage').then((m) 
 const ResetPinPage               = lazy(() => import('./pages/ResetPinPage').then((m) => ({ default: m.ResetPinPage })));
 const PreviewPage                = lazy(() => import('./pages/PreviewPage').then((m) => ({ default: m.PreviewPage })));
 const PublicGiftCardPage         = lazy(() => import('./pages/PublicGiftCardPage').then((m) => ({ default: m.PublicGiftCardPage })));
+const TicketsPage                = lazy(() => import('./pages/TicketsPage').then((m) => ({ default: m.TicketsPage })));
+const PublicTicketPage           = lazy(() => import('./pages/PublicTicketPage').then((m) => ({ default: m.PublicTicketPage })));
 
 function FullScreenSpinner() {
   return (
@@ -74,6 +76,7 @@ function AppRoutes() {
         <Route path="/menu/:tableId" element={<MenuPage />} />
         <Route path="/reset-pin" element={<ResetPinPage />} />
         <Route path="/giftcard/:code" element={<PublicGiftCardPage />} />
+        <Route path="/ticket/:code" element={<PublicTicketPage />} />
         <Route path="/preview" element={<PreviewPage />} />
         <Route path="/preview/*" element={<PreviewPage />} />
 
@@ -91,6 +94,7 @@ function AppRoutes() {
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/receivings" element={<ReceivingsPage />} />
           <Route path="/giftcards" element={<GiftCardsPage />} />
+          <Route path="/tickets" element={<TicketsPage />} />
           <Route path="/expenses" element={<ExpensesPage />} />
           <Route path="/cashups" element={<CashupsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
