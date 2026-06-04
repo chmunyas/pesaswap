@@ -77,7 +77,24 @@ export const api = {
     delete: (id: number) => request<ApiResponse>(`/items/${id}`, { method: 'DELETE' }),
   },
   itemKits: {
-    list: () => request<ApiResponse<{ item_kits?: EntityList }>>('/item-kits'),
+    list: (page = 1, limit = 50, search = '') =>
+      request<ApiResponse<{ item_kits?: EntityList; pagination?: { total: number } }>>(
+        `/item-kits?limit=${limit}&offset=${(page - 1) * limit}&search=${encodeURIComponent(search)}`,
+      ),
+    get: (id: number) =>
+      request<ApiResponse<{ item_kit: EntityPayload; items: EntityList }>>(`/item-kits/${id}`),
+    create: (data: ApiData) =>
+      request<ApiResponse<{ item_kit: EntityPayload; items: EntityList }>>('/item-kits', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: number, data: ApiData) =>
+      request<ApiResponse<{ item_kit: EntityPayload; items: EntityList }>>(`/item-kits/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: number) =>
+      request<ApiResponse<{ item_kit_id: number }>>(`/item-kits/${id}`, { method: 'DELETE' }),
   },
   customers: {
     list: (page = 1, limit = 20, search = '') =>

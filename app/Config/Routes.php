@@ -94,6 +94,9 @@ $routes->group('api', function($routes) {
 
     $routes->get('item-kits', 'Api\ItemKitsController::index');
     $routes->get('item-kits/(:num)', 'Api\ItemKitsController::show/$1');
+    $routes->post('item-kits', 'Api\ItemKitsController::create');
+    $routes->put('item-kits/(:num)', 'Api\ItemKitsController::update/$1');
+    $routes->delete('item-kits/(:num)', 'Api\ItemKitsController::delete/$1');
 
     $routes->get('messages', 'Api\MessagesController::index');
 
