@@ -40,3 +40,86 @@ $routes->add('reports/specific_customers', 'Reports::specific_customer_input');
 $routes->add('reports/specific_employees', 'Reports::specific_employee_input');
 $routes->add('reports/specific_discounts', 'Reports::specific_discount_input');
 $routes->add('reports/specific_suppliers', 'Reports::specific_supplier_input');
+
+// API Routes
+$routes->group('api', function($routes) {
+    $routes->post('auth/login', 'Api\AuthController::login');
+    $routes->post('auth/logout', 'Api\AuthController::logout');
+    $routes->get('auth/me', 'Api\AuthController::me');
+
+    $routes->get('dashboard/stats', 'Api\DashboardController::stats');
+
+    $routes->get('dinner-tables', 'Api\DinnerTablesController::index');
+    $routes->put('dinner-tables/(:num)/status', 'Api\DinnerTablesController::updateStatus/$1');
+
+    $routes->get('items', 'Api\ItemsController::index');
+    $routes->get('items/(:num)', 'Api\ItemsController::show/$1');
+    $routes->post('items', 'Api\ItemsController::create');
+    $routes->put('items/(:num)', 'Api\ItemsController::update/$1');
+    $routes->delete('items/(:num)', 'Api\ItemsController::delete/$1');
+
+    $routes->get('sales', 'Api\SalesController::index');
+    $routes->get('sales/(:num)', 'Api\SalesController::show/$1');
+
+    $routes->get('customers', 'Api\CustomersController::index');
+    $routes->get('customers/(:num)', 'Api\CustomersController::show/$1');
+    $routes->post('customers', 'Api\CustomersController::create');
+    $routes->put('customers/(:num)', 'Api\CustomersController::update/$1');
+    $routes->delete('customers/(:num)', 'Api\CustomersController::delete/$1');
+
+    $routes->get('suppliers', 'Api\SuppliersController::index');
+    $routes->get('suppliers/(:num)', 'Api\SuppliersController::show/$1');
+    $routes->post('suppliers', 'Api\SuppliersController::create');
+    $routes->put('suppliers/(:num)', 'Api\SuppliersController::update/$1');
+    $routes->delete('suppliers/(:num)', 'Api\SuppliersController::delete/$1');
+
+    $routes->get('receivings', 'Api\ReceivingsController::index');
+    $routes->get('receivings/(:num)', 'Api\ReceivingsController::show/$1');
+
+    $routes->get('giftcards', 'Api\GiftcardsController::index');
+    $routes->get('giftcards/(:num)', 'Api\GiftcardsController::show/$1');
+    $routes->post('giftcards', 'Api\GiftcardsController::create');
+    $routes->delete('giftcards/(:num)', 'Api\GiftcardsController::delete/$1');
+
+    $routes->get('expenses', 'Api\ExpensesController::index');
+    $routes->post('expenses', 'Api\ExpensesController::create');
+    $routes->delete('expenses/(:num)', 'Api\ExpensesController::delete/$1');
+
+    $routes->get('cashups', 'Api\CashupsController::index');
+
+    $routes->get('config', 'Api\ConfigController::index');
+    $routes->post('config', 'Api\ConfigController::save');
+
+    $routes->get('reports/summary', 'Api\ReportsController::summary');
+
+    $routes->get('item-kits', 'Api\ItemKitsController::index');
+    $routes->get('item-kits/(:num)', 'Api\ItemKitsController::show/$1');
+
+    $routes->get('messages', 'Api\MessagesController::index');
+
+    $routes->post('ai/chat', 'Api\AiController::chat');
+
+    $routes->options('auth/login', 'Api\AuthController::preflight');
+    $routes->options('auth/logout', 'Api\AuthController::preflight');
+    $routes->options('auth/me', 'Api\AuthController::preflight');
+    $routes->options('dashboard/stats', 'Api\DashboardController::preflight');
+    $routes->options('items', 'Api\ItemsController::preflight');
+    $routes->options('items/(:num)', 'Api\ItemsController::preflight');
+    $routes->options('sales', 'Api\SalesController::preflight');
+    $routes->options('sales/(:num)', 'Api\SalesController::preflight');
+    $routes->options('customers', 'Api\CustomersController::preflight');
+    $routes->options('customers/(:num)', 'Api\CustomersController::preflight');
+    $routes->options('suppliers', 'Api\SuppliersController::preflight');
+    $routes->options('suppliers/(:num)', 'Api\SuppliersController::preflight');
+    $routes->options('receivings', 'Api\ReceivingsController::preflight');
+    $routes->options('receivings/(:num)', 'Api\ReceivingsController::preflight');
+    $routes->options('giftcards', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcards/(:num)', 'Api\GiftcardsController::preflight');
+    $routes->options('expenses', 'Api\ExpensesController::preflight');
+    $routes->options('cashups', 'Api\CashupsController::preflight');
+    $routes->options('reports/summary', 'Api\ReportsController::preflight');
+    $routes->options('item-kits', 'Api\ItemKitsController::preflight');
+    $routes->options('item-kits/(:num)', 'Api\ItemKitsController::preflight');
+    $routes->options('messages', 'Api\MessagesController::preflight');
+    $routes->options('ai/chat', 'Api\AiController::preflight');
+});
