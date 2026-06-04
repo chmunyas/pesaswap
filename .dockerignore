@@ -34,9 +34,8 @@ git-svn-diff.py
 !LICENSE
 branding/
 
-# Build configs (not needed at runtime)
-composer.json
-composer.lock
+# Build configs (not needed at runtime, but composer.json/.lock ARE needed
+# at build time for `composer install` inside the Dockerfile).
 package.json
 package-lock.json
 gulpfile.js
