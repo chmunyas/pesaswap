@@ -604,8 +604,11 @@ class Sale extends Model
 
         $customer = $customer->get_info($customer_id);
 
+        $itemInfosByLine = [];
+
         foreach ($items as $line => $item_data) {
             $cur_item_info = $item->get_info($item_data['item_id']);
+            $itemInfosByLine[$line] = $cur_item_info;
 
             if ($item_data['price'] == 0.00) {
                 $item_data['discount'] = 0.00;
@@ -676,6 +679,36 @@ class Sale extends Model
                 $dinner_table->release($dinner_table_id);
             } else {
                 $dinner_table->occupy($dinner_table_id);
+            }
+        }
+
+        // Mint tickets for any sold ITEM_TICKET lines. Issuance is opt-in via
+        // line.item_type so existing sales paths are unaffected. The issuer
+        // runs inside the same transaction as the sale, so a failure here
+        // rolls back the whole sale rather than leaving orphan tickets.
+        if ($sale_status == COMPLETED) {
+            $hasTicketLine = false;
+            foreach ($itemInfosByLine as $info) {
+                if ($info && (int) ($info->item_type ?? 0) === ITEM_TICKET) {
+                    $hasTicketLine = true;
+                    break;
+                }
+            }
+
+            if ($hasTicketLine) {
+                try {
+                    service('ticket_issuer')->issue_for_sale(
+                        (int) $sale_id,
+                        (int) $customer_id,
+                        $items,
+                        $itemInfosByLine
+                    );
+                } catch (\Throwable $e) {
+                    log_message('error', 'Ticket issuance failed for sale ' . $sale_id . ': ' . $e->getMessage());
+                    $this->db->transRollback();
+
+                    return -1;
+                }
             }
         }
 

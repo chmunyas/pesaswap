@@ -3,6 +3,9 @@
 namespace Config;
 
 use App\Libraries\MY_Language;
+use App\Libraries\Qr_lib;
+use App\Libraries\Ticket_issuer;
+use App\Libraries\Ticket_token_lib;
 use Locale;
 use HTMLPurifier;
 use HTMLPurifier_Config;
@@ -75,5 +78,42 @@ class Services extends BaseService
         }
 
         return static::$htmlPurifier;
+    }
+
+    /**
+     * Wrapper around chillerlan/php-qrcode used by ticket rendering.
+     */
+    public static function qr_lib(bool $getShared = true): Qr_lib
+    {
+        if ($getShared) {
+            return static::getSharedInstance('qr_lib');
+        }
+
+        return new Qr_lib();
+    }
+
+    /**
+     * RS256 JWT issuer/verifier for ticket redemption tokens.
+     */
+    public static function ticket_token_lib(bool $getShared = true): Ticket_token_lib
+    {
+        if ($getShared) {
+            return static::getSharedInstance('ticket_token_lib');
+        }
+
+        return new Ticket_token_lib();
+    }
+
+    /**
+     * Issues tickets from completed sales lines. Used by the Sale model
+     * after a successful COMPLETED transaction.
+     */
+    public static function ticket_issuer(bool $getShared = true): Ticket_issuer
+    {
+        if ($getShared) {
+            return static::getSharedInstance('ticket_issuer');
+        }
+
+        return new Ticket_issuer();
     }
 }

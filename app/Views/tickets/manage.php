@@ -1,0 +1,47 @@
+<?php
+/**
+ * @var string $controller_name
+ * @var string $table_headers
+ * @var array  $config
+ */
+?>
+
+<?= view('partial/header') ?>
+
+<script type="text/javascript">
+    $(document).ready(function() {
+        <?= view('partial/bootstrap_tables_locale') ?>
+        table_support.init({
+            resource: '<?= esc($controller_name) ?>',
+            headers: <?= $table_headers ?>,
+            pageSize: <?= $config['lines_per_page'] ?>,
+            uniqueId: 'ticket_product_id'
+        });
+    });
+</script>
+
+<div id="title_bar" class="btn-toolbar">
+    <a class="btn btn-warning btn-sm pull-right" href="<?= esc(site_url('tickets/redeem')) ?>" style="margin-right: 5px;">
+        <span class="glyphicon glyphicon-qrcode">&nbsp;</span><?= lang('Tickets.redeem') ?>
+    </a>
+    <button class="btn btn-info btn-sm pull-right modal-dlg"
+            data-btn-submit="<?= lang('Common.submit') ?>"
+            data-href="<?= esc("$controller_name/view") ?>"
+            title="<?= lang('Tickets.new') ?>">
+        <span class="glyphicon glyphicon-plus">&nbsp;</span><?= lang('Tickets.new') ?>
+    </button>
+</div>
+
+<div id="toolbar">
+    <div class="pull-left btn-toolbar">
+        <button id="delete" class="btn btn-default btn-sm">
+            <span class="glyphicon glyphicon-trash">&nbsp;</span><?= lang('Common.delete') ?>
+        </button>
+    </div>
+</div>
+
+<div id="table_holder">
+    <table id="table"></table>
+</div>
+
+<?= view('partial/footer') ?>

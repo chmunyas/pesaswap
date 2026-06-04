@@ -172,4 +172,36 @@
         <?= $barcode ?><br>
         <?= $sale_id ?>
     </div>
+
+    <?php
+    // Render QR for any tickets issued by this sale.
+    // We query by sale_id and re-issue the JWT on demand so receipt reprints
+    // and history views work the same as the first print. Re-issued tokens
+    // verify identically (RS256 over the same tid) and resolve to the same
+    // ticket row.
+    $ticketModel = model(App\Models\Ticket::class);
+    $issuedTickets = $ticketModel->get_for_sale((int) ($sale_id ?? 0))->getResult();
+    if (!empty($issuedTickets)):
+        $qrLib    = service('qr_lib');
+        $tokenLib = service('ticket_token_lib');
+    ?>
+        <div id="ticket_qrs" style="margin-top: 16px; page-break-inside: avoid;">
+            <?php foreach ($issuedTickets as $issued):
+                $exp = !empty($issued->valid_to) ? new DateTimeImmutable($issued->valid_to) : null;
+                $tok = $tokenLib->issue((int) $issued->ticket_id, $exp);
+            ?>
+                <div style="text-align: center; margin-top: 12px; padding-top: 12px; border-top: 1px dashed #999;">
+                    <div style="font-weight: bold; margin-bottom: 4px;">
+                        <?= esc($issued->product_title ?? lang('Tickets.module_name')) ?>
+                    </div>
+                    <div style="display: inline-block; width: 160px;">
+                        <?= $qrLib->generate_svg($qrLib->build_redemption_url($tok)) ?>
+                    </div>
+                    <div style="font-family: monospace; font-size: 11px; letter-spacing: 1px; margin-top: 4px;">
+                        <?= esc($issued->code) ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
 </div>

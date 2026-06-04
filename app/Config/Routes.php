@@ -41,6 +41,9 @@ $routes->add('reports/specific_employees', 'Reports::specific_employee_input');
 $routes->add('reports/specific_discounts', 'Reports::specific_discount_input');
 $routes->add('reports/specific_suppliers', 'Reports::specific_supplier_input');
 
+// Public ticket claim/verify page (no auth). Token is the full JWT.
+$routes->get('t/(:any)', 'Ticket_public::show/$1');
+
 // API Routes
 $routes->group('api', function($routes) {
     $routes->post('auth/login', 'Api\AuthController::login');
