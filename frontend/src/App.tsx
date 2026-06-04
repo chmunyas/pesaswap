@@ -39,6 +39,7 @@ const ReservationsPage           = lazy(() => import('./pages/ReservationsPage')
 const FxPage                     = lazy(() => import('./pages/FxPage').then((m) => ({ default: m.FxPage })));
 const ResetPinPage               = lazy(() => import('./pages/ResetPinPage').then((m) => ({ default: m.ResetPinPage })));
 const PreviewPage                = lazy(() => import('./pages/PreviewPage').then((m) => ({ default: m.PreviewPage })));
+const PublicGiftCardPage         = lazy(() => import('./pages/PublicGiftCardPage').then((m) => ({ default: m.PublicGiftCardPage })));
 
 function FullScreenSpinner() {
   return (
@@ -72,6 +73,7 @@ function AppRoutes() {
         <Route path="/t/:tableId" element={<TablePayPage />} />
         <Route path="/menu/:tableId" element={<MenuPage />} />
         <Route path="/reset-pin" element={<ResetPinPage />} />
+        <Route path="/giftcard/:code" element={<PublicGiftCardPage />} />
         <Route path="/preview" element={<PreviewPage />} />
         <Route path="/preview/*" element={<PreviewPage />} />
 

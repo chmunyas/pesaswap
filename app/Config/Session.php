@@ -69,8 +69,15 @@ class Session extends BaseConfig
      *
      * WARNING: If you're using the database driver, don't forget to update
      *          your session table's PRIMARY KEY when changing this setting.
+     *
+     * PESASWAP override: disabled because requests reaching the PHP backend
+     * may come through reverse proxies (Vite dev proxy, nginx, Cloudflare),
+     * which makes the apparent client IP unstable and triggers session
+     * destruction on every request — that destruction emits an extra
+     * `Set-Cookie: ospos_session=deleted` header that wipes the cookie the
+     * browser just received from the same response.
      */
-    public bool $matchIP = true;
+    public bool $matchIP = false;
 
     /**
      * --------------------------------------------------------------------------
@@ -89,8 +96,13 @@ class Session extends BaseConfig
      * Whether to destroy session data associated with the old session ID
      * when auto-regenerating the session ID. When set to FALSE, the data
      * will be later deleted by the garbage collector.
+     *
+     * PESASWAP override: set to FALSE so the login response does not emit
+     * a second `Set-Cookie: ospos_session=deleted` header that immediately
+     * invalidates the cookie the browser just received. This was causing
+     * authenticated calls through the Vite dev proxy to fail with 401.
      */
-    public bool $regenerateDestroy = true;
+    public bool $regenerateDestroy = false;
 
     /**
      * --------------------------------------------------------------------------

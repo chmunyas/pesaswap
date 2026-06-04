@@ -79,7 +79,14 @@ $routes->group('api', function($routes) {
     $routes->get('giftcards', 'Api\GiftcardsController::index');
     $routes->get('giftcards/(:num)', 'Api\GiftcardsController::show/$1');
     $routes->post('giftcards', 'Api\GiftcardsController::create');
+    $routes->put('giftcards/(:num)', 'Api\GiftcardsController::update/$1');
     $routes->delete('giftcards/(:num)', 'Api\GiftcardsController::delete/$1');
+    $routes->get('giftcards/(:num)/history', 'Api\GiftcardsController::history/$1');
+    $routes->post('giftcards/(:num)/redeem', 'Api\GiftcardsController::redeem/$1');
+    $routes->post('giftcards/(:num)/refund', 'Api\GiftcardsController::refund/$1');
+    $routes->post('giftcards/(:num)/adjust', 'Api\GiftcardsController::adjust/$1');
+    $routes->post('giftcards/(:num)/topup', 'Api\GiftcardsController::topup/$1');
+    $routes->post('giftcards/(:num)/resend-email', 'Api\GiftcardsController::resendEmail/$1');
 
     $routes->get('expenses', 'Api\ExpensesController::index');
     $routes->post('expenses', 'Api\ExpensesController::create');
@@ -104,6 +111,7 @@ $routes->group('api', function($routes) {
 
     // PUBLIC endpoints — no auth required. Customer-safe data only.
     $routes->get('public/menu/(:segment)', 'Api\PublicController::menu/$1');
+    $routes->get('public/giftcards/balance/(:segment)', 'Api\PublicController::giftcardBalance/$1');
 
     $routes->options('auth/login', 'Api\AuthController::preflight');
     $routes->options('auth/logout', 'Api\AuthController::preflight');
@@ -121,6 +129,8 @@ $routes->group('api', function($routes) {
     $routes->options('receivings/(:num)', 'Api\ReceivingsController::preflight');
     $routes->options('giftcards', 'Api\GiftcardsController::preflight');
     $routes->options('giftcards/(:num)', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcards/(:num)/(:any)', 'Api\GiftcardsController::preflight');
+    $routes->options('public/giftcards/balance/(:segment)', 'Api\PublicController::preflight');
     $routes->options('expenses', 'Api\ExpensesController::preflight');
     $routes->options('cashups', 'Api\CashupsController::preflight');
     $routes->options('reports/summary', 'Api\ReportsController::preflight');

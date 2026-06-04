@@ -3,6 +3,8 @@
 namespace App\Controllers\Api;
 
 use CodeIgniter\HTTP\ResponseInterface;
+use CodeIgniter\HTTP\RequestInterface;
+use Psr\Log\LoggerInterface;
 
 /**
  * PublicController — exposes customer-safe endpoints that do NOT require a
@@ -63,5 +65,18 @@ class PublicController extends BaseApiController
             'table_id' => $tableId,
             'items'    => $items,
         ]);
+    }
+
+    /**
+     * GET /api/public/giftcards/balance/:code
+     *
+     * Customer-facing balance lookup. Delegates to GiftcardsController which
+     * handles the rate limiting, sanitization, and audit logging.
+     */
+    public function giftcardBalance(string $code): ResponseInterface
+    {
+        $gc = new GiftcardsController();
+        $gc->initController($this->request, $this->response, service('logger'));
+        return $gc->publicBalance($code);
     }
 }

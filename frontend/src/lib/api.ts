@@ -42,10 +42,32 @@ const supplierEndpoints = {
 };
 
 const giftCardEndpoints = {
-  list: (page = 1, limit = 20) =>
-    request<ApiResponse<EntityPayload>>(`/giftcards?limit=${limit}&offset=${(page - 1) * limit}`),
-  create: (data: ApiData) => request<ApiResponse>('/giftcards', { method: 'POST', body: JSON.stringify(data) }),
-  delete: (id: number) => request<ApiResponse>(`/giftcards/${id}`, { method: 'DELETE' }),
+  list: (page = 1, limit = 20, search = '', status = '') =>
+    request<ApiResponse<EntityPayload>>(
+      `/giftcards?limit=${limit}&offset=${(page - 1) * limit}&search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}`,
+    ),
+  get: (id: number) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}`),
+  history: (id: number) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/history`),
+  create: (data: ApiData) =>
+    request<ApiResponse<EntityPayload>>('/giftcards', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) =>
+    request<ApiResponse>(`/giftcards/${id}`, { method: 'DELETE' }),
+  redeem: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/redeem`, { method: 'POST', body: JSON.stringify(data) }),
+  refund: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/refund`, { method: 'POST', body: JSON.stringify(data) }),
+  adjust: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/adjust`, { method: 'POST', body: JSON.stringify(data) }),
+  topup: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/topup`, { method: 'POST', body: JSON.stringify(data) }),
+  resendEmail: (id: number) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/resend-email`, { method: 'POST' }),
+  publicBalance: (code: string) =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/balance/${encodeURIComponent(code)}`),
 };
 
 const expenseEndpoints = {

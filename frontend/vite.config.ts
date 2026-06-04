@@ -60,6 +60,13 @@ export default defineConfig({
               cacheableResponse: { statuses: [200] },
             },
           },
+          // PUBLIC giftcard balance — NEVER cache. Stale balance would mislead
+          // a customer at checkout. Falls through to network on every call.
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/public/giftcards/balance/'),
+            handler: 'NetworkOnly',
+            options: { cacheName: 'pesaswap-public-giftcards' },
+          },
           // Dashboard stats — authenticated; cache briefly so refresh-on-load
           // is instant. UI shows "last updated" so staleness is visible.
           // 200s only; purged on logout via clearAuthenticatedCaches().
