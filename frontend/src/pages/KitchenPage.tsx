@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ChefHat,
   Coffee,
@@ -9,6 +10,9 @@ import {
   Bell,
   Trash2,
   Plus,
+  AlertTriangle,
+  UserCheck,
+  Users,
 } from 'lucide-react';
 import {
   useKitchenOrders,
@@ -16,11 +20,25 @@ import {
   submitNewOrder,
   clearOldOrders,
   generateOrderId,
+  realtime,
+  playNotificationSound,
   type KitchenOrder,
   type OrderStatus,
   type KitchenOrderItem,
 } from '../lib/realtime';
 import { useI18n } from '../lib/i18n';
+import {
+  addDemoWalkoutTable,
+  alertKey,
+  DEFAULT_WALKOUT_MINUTES,
+  evaluateRisk,
+  getOpenTables,
+  markAlerted,
+  markResolved,
+  minutesOpen,
+  type OpenTable,
+} from '../lib/walkout';
+import { formatCurrency } from '../lib/utils';
 
 const STATUS_FLOW: Record<OrderStatus, OrderStatus | null> = {
   new: 'accepted',
@@ -51,11 +69,23 @@ const STATUS_BG: Record<OrderStatus, string> = {
 
 type Filter = 'all' | 'kitchen' | 'bar';
 
+const VALID_FILTERS: Filter[] = ['all', 'kitchen', 'bar'];
+
+function parseFilter(raw: string | null): Filter {
+  return (VALID_FILTERS as string[]).includes(raw ?? '') ? (raw as Filter) : 'all';
+}
+
 export function KitchenPage() {
   const { t } = useI18n();
   const orders = useKitchenOrders();
-  const [filter, setFilter] = useState<Filter>('all');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [filter, setFilter] = useState<Filter>(() => parseFilter(searchParams.get('destination')));
   const [showDemo, setShowDemo] = useState(false);
+
+  // Walkout risk state
+  const [openTables, setOpenTables] = useState<OpenTable[]>(() => getOpenTables());
+  const [riskTick, setRiskTick] = useState(0);
+  const lastEvaluationRef = useRef<number>(0);
 
   // Periodically clear old served/cancelled orders
   useEffect(() => {
@@ -63,6 +93,72 @@ export function KitchenPage() {
     const interval = setInterval(() => clearOldOrders(120), 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Sync URL ?destination= to local filter (handles back/forward and shareable URLs)
+  useEffect(() => {
+    const next = parseFilter(searchParams.get('destination'));
+    setFilter((prev) => (prev === next ? prev : next));
+  }, [searchParams]);
+
+  // Re-evaluate walkout risk every 60s. Emit `walkout.alert` ONCE per (table_id, openedAt).
+  useEffect(() => {
+    function evaluate() {
+      const tables = getOpenTables();
+      setOpenTables(tables);
+      const { atRisk, newRiskKeys } = evaluateRisk(tables);
+      lastEvaluationRef.current = Date.now();
+      if (newRiskKeys.length > 0) {
+        markAlerted(newRiskKeys);
+        // Emit a realtime event per newly-flagged table (visual + audio cue)
+        for (const key of newRiskKeys) {
+          const tbl = atRisk.find((x) => alertKey(x) === key);
+          if (!tbl) continue;
+          realtime.emit({
+            type: 'walkout.alert',
+            data: {
+              table_id: tbl.tableNumber,
+              outstanding: tbl.outstanding,
+              duration_minutes: minutesOpen(tbl),
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+      }
+    }
+    evaluate();
+    const interval = setInterval(() => {
+      evaluate();
+      setRiskTick((n) => n + 1);
+    }, 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const walkoutRiskTables = useMemo(
+    () => evaluateRisk(openTables).atRisk,
+    // riskTick forces re-eval of elapsed-time fields between evaluate() calls
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [openTables, riskTick],
+  );
+
+  function handleFilter(next: Filter) {
+    setFilter(next);
+    const params = new URLSearchParams(searchParams);
+    if (next === 'all') params.delete('destination');
+    else params.set('destination', next);
+    setSearchParams(params, { replace: true });
+  }
+
+  function handleResolveTable(table: OpenTable) {
+    markResolved(table);
+    setOpenTables(getOpenTables());
+    setRiskTick((n) => n + 1);
+  }
+
+  function handleAddDemoRisk() {
+    addDemoWalkoutTable();
+    setOpenTables(getOpenTables());
+    setRiskTick((n) => n + 1);
+  }
 
   const activeOrders = useMemo(() => {
     const filtered = orders.filter((o) => o.status !== 'served' && o.status !== 'cancelled');
@@ -148,7 +244,7 @@ export function KitchenPage() {
         {(['all', 'kitchen', 'bar'] as Filter[]).map((f) => (
           <button
             key={f}
-            onClick={() => setFilter(f)}
+            onClick={() => handleFilter(f)}
             className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-semibold capitalize transition-colors ${
               filter === f
                 ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
@@ -160,6 +256,71 @@ export function KitchenPage() {
           </button>
         ))}
       </div>
+
+      {/* Walkout risk banner */}
+      {walkoutRiskTables.length > 0 && (
+        <div className="rounded-2xl border-2 border-red-300 bg-gradient-to-r from-red-50 to-rose-50 p-4 shadow-sm dark:border-red-800 dark:from-red-950/40 dark:to-rose-950/40">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-600 text-white">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-red-900 dark:text-red-100">
+                  Walkout risk: {walkoutRiskTables.length} {walkoutRiskTables.length === 1 ? 'table' : 'tables'} open &gt; {DEFAULT_WALKOUT_MINUTES} min with no payment
+                </p>
+                <p className="mt-0.5 text-xs text-red-700 dark:text-red-300">
+                  Send a waiter to settle or resolve below.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleAddDemoRisk}
+              className="self-start rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-red-950 dark:text-red-200 dark:hover:bg-red-900/50"
+            >
+              + Demo at-risk table
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {walkoutRiskTables.map((tbl) => (
+              <div key={tbl.id} className="rounded-xl border border-red-200 bg-white p-3 shadow-sm dark:border-red-900 dark:bg-gray-900">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-bold text-gray-900 dark:text-white">Table {tbl.tableNumber}</p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                      {minutesOpen(tbl)} min · {tbl.partySize} pax{tbl.server ? ` · ${tbl.server}` : ''}
+                    </p>
+                  </div>
+                  <p className="text-sm font-bold text-red-600 dark:text-red-400">
+                    {formatCurrency(tbl.outstanding)}
+                  </p>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Visual-only "send waiter" demo cue
+                      playNotificationSound('alert');
+                    }}
+                    className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-red-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-red-700"
+                  >
+                    <Users className="h-3 w-3" /> Send waiter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleResolveTable(tbl)}
+                    className="flex items-center justify-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                  >
+                    <UserCheck className="h-3 w-3" /> Resolved
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Orders */}
       {activeOrders.length === 0 ? (

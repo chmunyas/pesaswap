@@ -3,7 +3,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useTheme } from '../../hooks/useTheme';
 import { MobileBottomNav } from './MobileBottomNav';
 import { useI18n, LOCALE_LABELS, type Locale } from '../../lib/i18n';
-import { ChefHat, FileText, Languages } from 'lucide-react';
+import { ChefHat, Coffee, FileText, Languages, Calendar, Globe2, Smartphone } from 'lucide-react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -40,13 +40,17 @@ const navItems = [
   { to: '/giftcards', icon: CreditCard, label: 'Gift Cards', group: 'main' },
   { to: '/qr', icon: QrCode, label: 'QR Codes', group: 'main' },
   { to: '/kds', icon: ChefHat, label: 'Kitchen Display', group: 'main' },
+  { to: '/kds?destination=bar', icon: Coffee, label: 'Bar Display', group: 'main' },
+  { to: '/reservations', icon: Calendar, label: 'Reservations', group: 'main' },
   { to: '/invoices', icon: FileText, label: 'Invoices', group: 'office' },
   { to: '/payment-summary', icon: Wallet, label: 'Payment Summary', group: 'office' },
+  { to: '/fx', icon: Globe2, label: 'FX Converter', group: 'office' },
   { to: '/expenses', icon: Wallet, label: 'Expenses', group: 'office' },
   { to: '/cashups', icon: Wallet, label: 'Cashups', group: 'office' },
   { to: '/reports', icon: BarChart3, label: 'Reports', group: 'office' },
   { to: '/messages', icon: Mail, label: 'Messages', group: 'office' },
   { to: '/office', icon: Settings, label: 'Office', group: 'office' },
+  { to: '/preview', icon: Smartphone, label: 'Mobile Preview', group: 'ai' },
   { to: '/ai', icon: MessageSquareText, label: 'AI Assistant', group: 'ai' },
 ];
 
