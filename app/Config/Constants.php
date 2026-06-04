@@ -111,6 +111,7 @@ const ITEM = 0;
 const ITEM_KIT = 1;
 const ITEM_AMOUNT_ENTRY = 2;
 const ITEM_TEMP = 3;
+const ITEM_TICKET = 4;
 const NEW_ITEM = -1;
 
 const PRINT_ALL = 0;
