@@ -135,6 +135,10 @@ class Qr_lib
             'addQuietzone'    => true,
             'quietzoneSize'   => (int) ($overrides['margin'] ?? $defaults['margin']),
             'version'         => Version::AUTO,
+            // Strip the XML preamble so the SVG can be inlined directly
+            // inside HTML (receipts, dompdf PDFs, the customer claim page)
+            // without parser confusion.
+            'svgAddXmlHeader' => false,
         ]);
     }
 
