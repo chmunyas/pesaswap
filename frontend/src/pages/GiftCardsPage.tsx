@@ -18,17 +18,38 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   AlertTriangle,
+  Award,
+  Cake,
+  Calendar,
+  Clock,
+  Coffee,
+  Cookie,
   CreditCard,
+  Crown,
+  Diamond,
+  Flower2,
+  Gift,
+  Heart,
   Mail,
+  Music4,
+  Palette,
+  PartyPopper,
   Pencil,
+  Pizza,
   Plus,
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
+  Star,
   Trash2,
+  TreePine,
   TrendingDown,
   TrendingUp,
+  Trophy,
+  UserPlus,
   Wallet,
+  Wand2,
   X as XIcon,
   Zap,
 } from 'lucide-react';
@@ -77,6 +98,49 @@ interface GiftCard {
   remaining_pct: number;
   days_to_expiry: number | null;
   updated_at: string;
+  // WeChat-parity modernization fields (nullable when migration not applied)
+  design: Design | null;
+  denomination: Denomination | null;
+  delivery_status: 'immediate' | 'pending' | 'sending' | 'sent' | 'failed' | 'cancelled';
+  deliver_at: string | null;
+  delivered_at: string | null;
+  pending_transfer: PendingTransfer | null;
+}
+
+interface Design {
+  design_id: number;
+  name: string;
+  background_from: string;
+  background_to: string;
+  accent_color: string;
+  text_color: string;
+  image_url: string | null;
+  icon: string | null;
+  active: boolean;
+  sort_order: number;
+}
+
+interface Denomination {
+  denomination_id?: number;
+  amount: number;
+  label: string | null;
+}
+
+interface DenominationOption extends Denomination {
+  denomination_id: number;
+  currency: string;
+  description: string | null;
+  active: boolean;
+  sort_order: number;
+}
+
+interface PendingTransfer {
+  transfer_id: number;
+  channel: string;
+  to_recipient_name: string | null;
+  to_recipient_email: string | null;
+  expires_at: string | null;
+  created_at: string | null;
 }
 
 interface Stats {
@@ -105,14 +169,33 @@ const STATUS_STYLE: Record<Status, { badge: string; label: string }> = {
 };
 
 const ACTION_ICON: Record<string, { icon: typeof Plus; color: string }> = {
-  created:   { icon: Plus, color: 'text-emerald-600' },
-  redeemed:  { icon: TrendingDown, color: 'text-rose-600' },
-  refunded:  { icon: TrendingUp, color: 'text-emerald-600' },
-  adjusted:  { icon: Pencil, color: 'text-amber-600' },
-  topped_up: { icon: Wallet, color: 'text-blue-600' },
-  emailed:   { icon: Mail, color: 'text-purple-600' },
-  disabled:  { icon: XIcon, color: 'text-rose-600' },
+  created:               { icon: Plus, color: 'text-emerald-600' },
+  redeemed:              { icon: TrendingDown, color: 'text-rose-600' },
+  refunded:              { icon: TrendingUp, color: 'text-emerald-600' },
+  adjusted:              { icon: Pencil, color: 'text-amber-600' },
+  topped_up:             { icon: Wallet, color: 'text-blue-600' },
+  emailed:               { icon: Mail, color: 'text-purple-600' },
+  disabled:              { icon: XIcon, color: 'text-rose-600' },
+  transfer_requested:    { icon: UserPlus, color: 'text-indigo-600' },
+  transfer_accepted_out: { icon: Send, color: 'text-indigo-600' },
+  transfer_accepted_in:  { icon: Gift, color: 'text-emerald-600' },
+  transfer_cancelled:    { icon: XIcon, color: 'text-gray-500' },
+  scheduled:             { icon: Clock, color: 'text-sky-600' },
+  delivered:             { icon: Mail, color: 'text-purple-600' },
 };
+
+// Lucide icon lookup for design rendering. Server-side whitelist in
+// GiftcardsController::ALLOWED_DESIGN_ICONS must stay in sync.
+const DESIGN_ICONS: Record<string, typeof Gift> = {
+  Gift, Sparkles, TreePine, Cake, Star, Heart,
+  PartyPopper, Cookie, Flower2, Music4, Coffee, Pizza,
+  Award, Crown, Diamond, Trophy, Wand2,
+};
+
+function designIcon(name: string | null): typeof Gift {
+  if (!name) return Gift;
+  return DESIGN_ICONS[name] ?? Gift;
+}
 
 function normalizeGiftCard(raw: Record<string, unknown>): GiftCard {
   const status = String(raw.status ?? 'active') as Status;
@@ -136,6 +219,54 @@ function normalizeGiftCard(raw: Record<string, unknown>): GiftCard {
     remaining_pct: Number(raw.remaining_pct ?? 0),
     days_to_expiry: raw.days_to_expiry == null ? null : Number(raw.days_to_expiry),
     updated_at: String(raw.updated_at ?? new Date().toISOString()),
+    design: raw.design && typeof raw.design === 'object' ? normalizeDesign(raw.design as Record<string, unknown>) : null,
+    denomination: raw.denomination && typeof raw.denomination === 'object'
+      ? { amount: Number((raw.denomination as Record<string, unknown>).amount ?? 0), label: ((raw.denomination as Record<string, unknown>).label as string | null) ?? null }
+      : null,
+    delivery_status: (String(raw.delivery_status ?? 'immediate') as GiftCard['delivery_status']),
+    deliver_at: (raw.deliver_at as string | null) ?? null,
+    delivered_at: (raw.delivered_at as string | null) ?? null,
+    pending_transfer: raw.pending_transfer && typeof raw.pending_transfer === 'object'
+      ? normalizePendingTransfer(raw.pending_transfer as Record<string, unknown>)
+      : null,
+  };
+}
+
+function normalizeDesign(raw: Record<string, unknown>): Design {
+  return {
+    design_id: Number(raw.design_id ?? 0),
+    name: String(raw.name ?? ''),
+    background_from: String(raw.background_from ?? '#3B82F6'),
+    background_to: String(raw.background_to ?? '#8B5CF6'),
+    accent_color: String(raw.accent_color ?? '#FFFFFF'),
+    text_color: String(raw.text_color ?? '#FFFFFF'),
+    image_url: (raw.image_url as string | null) ?? null,
+    icon: (raw.icon as string | null) ?? null,
+    active: Boolean(raw.active),
+    sort_order: Number(raw.sort_order ?? 0),
+  };
+}
+
+function normalizeDenomination(raw: Record<string, unknown>): DenominationOption {
+  return {
+    denomination_id: Number(raw.denomination_id ?? 0),
+    currency: String(raw.currency ?? 'KES'),
+    amount: Number(raw.amount ?? 0),
+    label: (raw.label as string | null) ?? null,
+    description: (raw.description as string | null) ?? null,
+    active: Boolean(raw.active),
+    sort_order: Number(raw.sort_order ?? 0),
+  };
+}
+
+function normalizePendingTransfer(raw: Record<string, unknown>): PendingTransfer {
+  return {
+    transfer_id: Number(raw.transfer_id ?? 0),
+    channel: String(raw.channel ?? 'link'),
+    to_recipient_name: (raw.to_recipient_name as string | null) ?? null,
+    to_recipient_email: (raw.to_recipient_email as string | null) ?? null,
+    expires_at: (raw.expires_at as string | null) ?? null,
+    created_at: (raw.created_at as string | null) ?? null,
   };
 }
 
@@ -167,6 +298,9 @@ interface CreateForm {
   currency: string;
   expires_in_days: string;
   payment_provider: '' | Provider;
+  design_id: string;
+  denomination_id: string;
+  deliver_at: string;
 }
 
 const EMPTY_CREATE: CreateForm = {
@@ -178,6 +312,25 @@ const EMPTY_CREATE: CreateForm = {
   currency: 'KES',
   expires_in_days: '365',
   payment_provider: '',
+  design_id: '',
+  denomination_id: '',
+  deliver_at: '',
+};
+
+interface TransferForm {
+  to_recipient_name: string;
+  to_recipient_email: string;
+  to_recipient_phone: string;
+  message: string;
+  channel: 'link' | 'email' | 'sms';
+}
+
+const EMPTY_TRANSFER: TransferForm = {
+  to_recipient_name: '',
+  to_recipient_email: '',
+  to_recipient_phone: '',
+  message: '',
+  channel: 'link',
 };
 
 export function GiftCardsPage() {
@@ -187,12 +340,16 @@ export function GiftCardsPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'' | Status>('');
 
+  const [designs, setDesigns] = useState<Design[]>([]);
+  const [denominations, setDenominations] = useState<DenominationOption[]>([]);
+
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState<CreateForm>(EMPTY_CREATE);
   const [creating, setCreating] = useState(false);
 
   const [detail, setDetail] = useState<{ card: GiftCard; history: HistoryEntry[] } | null>(null);
   const [deleting, setDeleting] = useState<GiftCard | null>(null);
+  const [transferTarget, setTransferTarget] = useState<GiftCard | null>(null);
 
   async function load() {
     setLoading(true);
@@ -210,10 +367,28 @@ export function GiftCardsPage() {
     }
   }
 
+  async function loadDesignsAndDenominations() {
+    try {
+      const [d, n] = await Promise.all([api.giftcards.designs.list(), api.giftcards.denominations.list()]);
+      const designList = Array.isArray(d.data?.designs) ? d.data!.designs : [];
+      setDesigns(designList.map((r) => normalizeDesign(r as Record<string, unknown>)).filter((x) => x.active));
+      const denomList = Array.isArray(n.data?.denominations) ? n.data!.denominations : [];
+      setDenominations(denomList.map((r) => normalizeDenomination(r as Record<string, unknown>)).filter((x) => x.active));
+    } catch {
+      // Modernization migration not applied — empty lists keep the page usable.
+      setDesigns([]);
+      setDenominations([]);
+    }
+  }
+
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, statusFilter]);
+
+  useEffect(() => {
+    void loadDesignsAndDenominations();
+  }, []);
 
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
@@ -233,6 +408,9 @@ export function GiftCardsPage() {
         currency: createForm.currency,
         expires_in_days: createForm.expires_in_days ? Number(createForm.expires_in_days) : undefined,
         payment_provider: createForm.payment_provider || undefined,
+        design_id: createForm.design_id ? Number(createForm.design_id) : undefined,
+        denomination_id: createForm.denomination_id ? Number(createForm.denomination_id) : undefined,
+        deliver_at: createForm.deliver_at || undefined,
       });
       const code = res.data?.giftcard ? normalizeGiftCard(res.data.giftcard as Record<string, unknown>).giftcard_number : '';
       showToast(`Gift card ${code} issued`);
@@ -354,6 +532,7 @@ export function GiftCardsPage() {
               card={card}
               onClick={() => openDetail(card)}
               onDelete={() => setDeleting(card)}
+              onTransfer={() => setTransferTarget(card)}
             />
           ))}
         </div>
@@ -362,12 +541,71 @@ export function GiftCardsPage() {
       {/* Create modal */}
       <Modal isOpen={showCreate} onClose={() => !creating && setShowCreate(false)} title="Issue gift card" size="lg">
         <form onSubmit={handleCreate} className="space-y-4">
+          {/* Design picker (modernization). Empty list = migration not applied; hide block. */}
+          {designs.length > 0 && (
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <p className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-gray-500">
+                <Palette className="h-3 w-3" /> Design
+              </p>
+              <div className="mt-2 grid grid-cols-3 gap-2 md:grid-cols-6">
+                <button
+                  type="button"
+                  onClick={() => setCreateForm({ ...createForm, design_id: '' })}
+                  className={`flex aspect-square flex-col items-center justify-center rounded-lg border text-[10px] font-semibold transition ${
+                    createForm.design_id === '' ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-gray-200 hover:border-gray-300 dark:border-gray-700'
+                  }`}
+                  aria-label="No design"
+                >
+                  <XIcon className="mb-1 h-4 w-4 text-gray-400" />
+                  None
+                </button>
+                {designs.map((d) => (
+                  <DesignTile
+                    key={d.design_id}
+                    design={d}
+                    selected={createForm.design_id === String(d.design_id)}
+                    onClick={() => setCreateForm({ ...createForm, design_id: String(d.design_id) })}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Preset denomination chips (modernization). */}
+          {denominations.filter((d) => d.currency === createForm.currency).length > 0 && (
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">Preset amount ({createForm.currency})</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {denominations
+                  .filter((d) => d.currency === createForm.currency)
+                  .map((d) => (
+                    <button
+                      key={d.denomination_id}
+                      type="button"
+                      onClick={() => setCreateForm({
+                        ...createForm,
+                        denomination_id: createForm.denomination_id === String(d.denomination_id) ? '' : String(d.denomination_id),
+                        value: createForm.denomination_id === String(d.denomination_id) ? createForm.value : String(d.amount),
+                      })}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                        createForm.denomination_id === String(d.denomination_id)
+                          ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'
+                      }`}
+                    >
+                      {d.label ?? `${d.currency} ${d.amount.toLocaleString()}`}
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Amount" required>
               <div className="flex">
                 <select
                   value={createForm.currency}
-                  onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value })}
+                  onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value, denomination_id: '' })}
                   className="rounded-l-lg border border-r-0 border-gray-200 bg-gray-50 px-2 text-xs font-mono font-semibold dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                 >
                   <option>KES</option><option>USD</option><option>EUR</option><option>GBP</option><option>NGN</option><option>UGX</option><option>TZS</option>
@@ -378,7 +616,7 @@ export function GiftCardsPage() {
                   min="1"
                   step="0.01"
                   value={createForm.value}
-                  onChange={(e) => setCreateForm({ ...createForm, value: e.target.value })}
+                  onChange={(e) => setCreateForm({ ...createForm, value: e.target.value, denomination_id: '' })}
                   className="w-full rounded-r-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
                 />
               </div>
@@ -425,6 +663,21 @@ export function GiftCardsPage() {
                 className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white md:col-span-2"
               />
             </div>
+            <div className="mt-2">
+              <p className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-gray-500">
+                <Calendar className="h-3 w-3" /> Schedule delivery (optional)
+              </p>
+              <input
+                type="datetime-local"
+                value={createForm.deliver_at}
+                onChange={(e) => setCreateForm({ ...createForm, deliver_at: e.target.value })}
+                min={new Date(Date.now() + 60 * 1000).toISOString().slice(0, 16)}
+                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white md:max-w-[18rem]"
+              />
+              <p className="mt-1 text-[10px] text-gray-500">
+                Leave blank to send the delivery email immediately. With a date, the card is created in <span className="font-semibold">pending</span> state and dispatched by <code className="font-mono">spark giftcards:dispatch</code>.
+              </p>
+            </div>
           </div>
 
           <Field label="Payment method (purchaser pays via)">
@@ -466,6 +719,23 @@ export function GiftCardsPage() {
           detail={detail}
           onClose={() => setDetail(null)}
           onRefresh={refreshDetail}
+          onTransfer={() => {
+            setTransferTarget(detail.card);
+            setDetail(null);
+          }}
+        />
+      )}
+
+      {/* Transfer modal */}
+      {transferTarget && (
+        <TransferModal
+          card={transferTarget}
+          onClose={() => setTransferTarget(null)}
+          onSent={async () => {
+            setTransferTarget(null);
+            await load();
+            showToast('Transfer requested — share the link with the recipient');
+          }}
         />
       )}
 
@@ -511,56 +781,88 @@ function StatCard({ label, value, color, warn }: { label: string; value: string;
   );
 }
 
-function GiftCardCard({ card, onClick, onDelete }: { card: GiftCard; onClick: () => void; onDelete: () => void }) {
+function GiftCardCard({ card, onClick, onDelete, onTransfer }: { card: GiftCard; onClick: () => void; onDelete: () => void; onTransfer: () => void }) {
   const style = STATUS_STYLE[card.status];
+  const Icon = designIcon(card.design?.icon ?? null);
+  const headerGradient = card.design
+    ? { backgroundImage: `linear-gradient(135deg, ${card.design.background_from}, ${card.design.background_to})` }
+    : { backgroundImage: 'linear-gradient(135deg, #3B82F6, #8B5CF6)' };
+  const headerTextColor = card.design?.text_color ?? '#FFFFFF';
   return (
-    <div className="group flex flex-col rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-gray-700 dark:bg-gray-800">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-mono text-sm font-bold text-gray-900 dark:text-white">{card.giftcard_number}</p>
+    <div className="group flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-gray-700 dark:bg-gray-800">
+      {/* Design strip */}
+      <div className="flex items-center justify-between px-4 py-3" style={{ ...headerGradient, color: headerTextColor }}>
+        <div className="flex items-center gap-2">
+          <Icon className="h-5 w-5 opacity-90" />
+          <p className="font-mono text-xs font-bold tracking-wide">{card.masked_code}</p>
+        </div>
+        <span className={`shrink-0 rounded-full bg-white/85 px-2 py-0.5 text-[10px] font-bold text-gray-800 ${style.badge}`}>{style.label}</span>
+      </div>
+
+      <div className="flex flex-1 flex-col p-5">
+        <div>
           {card.recipient_name && (
-            <p className="mt-1 truncate text-xs text-gray-500">→ {card.recipient_name}</p>
+            <p className="truncate text-xs text-gray-500">→ {card.recipient_name}</p>
           )}
         </div>
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${style.badge}`}>{style.label}</span>
-      </div>
 
-      <div className="mt-4">
-        <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">Balance</p>
-        <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{card.currency} {card.value.toLocaleString()}</p>
-        <p className="text-[10px] text-gray-500">of {card.currency} {card.initial_value.toLocaleString()} initial</p>
-        <div className="mt-2 h-1 rounded-full bg-gray-100 dark:bg-gray-900">
-          <div
-            className={`h-1 rounded-full ${card.status === 'active' ? 'bg-emerald-500' : card.status === 'used' ? 'bg-gray-400' : 'bg-amber-500'}`}
-            style={{ width: `${Math.max(0, Math.min(100, card.remaining_pct))}%` }}
-          />
+        <div className="mt-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">Balance</p>
+          <p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{card.currency} {card.value.toLocaleString()}</p>
+          <p className="text-[10px] text-gray-500">of {card.currency} {card.initial_value.toLocaleString()} initial</p>
+          <div className="mt-2 h-1 rounded-full bg-gray-100 dark:bg-gray-900">
+            <div
+              className={`h-1 rounded-full ${card.status === 'active' ? 'bg-emerald-500' : card.status === 'used' ? 'bg-gray-400' : 'bg-amber-500'}`}
+              style={{ width: `${Math.max(0, Math.min(100, card.remaining_pct))}%` }}
+            />
+          </div>
         </div>
-      </div>
 
-      {card.days_to_expiry !== null && (
-        <p className={`mt-3 text-[10px] ${card.days_to_expiry < 0 ? 'text-rose-600' : card.days_to_expiry < 30 ? 'text-amber-600' : 'text-gray-500'}`}>
-          {card.days_to_expiry < 0
-            ? `Expired ${-card.days_to_expiry}d ago`
-            : `Expires in ${card.days_to_expiry}d`}
-        </p>
-      )}
+        {/* Status badges */}
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px]">
+          {card.pending_transfer && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+              <UserPlus className="h-3 w-3" /> Transfer pending
+            </span>
+          )}
+          {card.delivery_status === 'pending' && card.deliver_at && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-700 dark:bg-sky-900/40 dark:text-sky-200">
+              <Clock className="h-3 w-3" /> Sends {new Date(card.deliver_at).toLocaleString()}
+            </span>
+          )}
+          {card.days_to_expiry !== null && (
+            <span className={card.days_to_expiry < 0 ? 'text-rose-600' : card.days_to_expiry < 30 ? 'text-amber-600' : 'text-gray-500'}>
+              {card.days_to_expiry < 0 ? `Expired ${-card.days_to_expiry}d ago` : `Expires in ${card.days_to_expiry}d`}
+            </span>
+          )}
+        </div>
 
-      <div className="mt-auto flex gap-2 pt-4">
-        <button
-          type="button"
-          onClick={onClick}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
-        >
-          <Pencil className="h-3.5 w-3.5" /> Manage
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          aria-label="Disable"
-          className="rounded-lg border border-rose-200 bg-white px-2 py-1.5 text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-gray-900 dark:text-rose-300 dark:hover:bg-rose-900/20"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+        <div className="mt-auto flex gap-2 pt-4">
+          <button
+            type="button"
+            onClick={onClick}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Manage
+          </button>
+          <button
+            type="button"
+            onClick={onTransfer}
+            disabled={card.status !== 'active' || card.pending_transfer !== null}
+            aria-label="Send as gift"
+            className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-indigo-900 dark:bg-gray-900 dark:text-indigo-200 dark:hover:bg-indigo-900/20"
+          >
+            <Gift className="h-3.5 w-3.5" /> Gift
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            aria-label="Disable"
+            className="rounded-lg border border-rose-200 bg-white px-2 py-1.5 text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-gray-900 dark:text-rose-300 dark:hover:bg-rose-900/20"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -570,10 +872,12 @@ function DetailModal({
   detail,
   onClose,
   onRefresh,
+  onTransfer,
 }: {
   detail: { card: GiftCard; history: HistoryEntry[] };
   onClose: () => void;
   onRefresh: () => Promise<void>;
+  onTransfer: () => void;
 }) {
   const { card, history } = detail;
   const [activeAction, setActiveAction] = useState<'' | 'redeem' | 'refund' | 'adjust' | 'topup'>('');
@@ -585,6 +889,20 @@ function DetailModal({
   const [showCode, setShowCode] = useState(false);
 
   const style = STATUS_STYLE[card.status];
+
+  async function cancelTransfer() {
+    if (!card.pending_transfer) return;
+    setBusy(true);
+    try {
+      await api.giftcards.transferCancel(card.giftcard_id, card.pending_transfer.transfer_id);
+      showToast('Transfer cancelled');
+      await onRefresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to cancel transfer', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function reset() {
     setActiveAction('');
@@ -701,12 +1019,55 @@ function DetailModal({
           </div>
         </div>
 
+        {/* Pending transfer banner */}
+        {card.pending_transfer && (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 dark:border-indigo-900 dark:bg-indigo-900/30">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <UserPlus className="mt-0.5 h-4 w-4 text-indigo-600 dark:text-indigo-300" />
+                <div className="text-xs">
+                  <p className="font-semibold text-indigo-800 dark:text-indigo-200">
+                    Transfer pending — balance frozen until accepted
+                  </p>
+                  <p className="mt-0.5 text-indigo-700 dark:text-indigo-300">
+                    To {card.pending_transfer.to_recipient_name ?? 'recipient'}
+                    {card.pending_transfer.to_recipient_email && <> ({card.pending_transfer.to_recipient_email})</>}
+                    {card.pending_transfer.expires_at && <> · expires {formatRelative(card.pending_transfer.expires_at)}</>}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={cancelTransfer}
+                disabled={busy}
+                className="rounded-lg border border-indigo-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 dark:border-indigo-800 dark:bg-gray-900 dark:text-indigo-200 dark:hover:bg-indigo-900/40"
+              >
+                Cancel transfer
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Scheduled delivery banner */}
+        {card.delivery_status === 'pending' && card.deliver_at && (
+          <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs dark:border-sky-900 dark:bg-sky-900/30">
+            <p className="inline-flex items-center gap-1.5 font-semibold text-sky-800 dark:text-sky-200">
+              <Clock className="h-3.5 w-3.5" /> Scheduled delivery
+            </p>
+            <p className="mt-0.5 text-sky-700 dark:text-sky-300">
+              Email to {card.recipient_email} will be sent on {new Date(card.deliver_at).toLocaleString()} by the
+              <code className="ml-1 font-mono">spark giftcards:dispatch</code> cron.
+            </p>
+          </div>
+        )}
+
         {/* Actions row */}
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <ActionButton label="Redeem" icon={TrendingDown} active={activeAction === 'redeem'} onClick={() => setActiveAction('redeem')} disabled={card.status !== 'active'} />
-          <ActionButton label="Top up" icon={Wallet} active={activeAction === 'topup'} onClick={() => setActiveAction('topup')} disabled={card.status === 'disabled'} />
-          <ActionButton label="Refund" icon={TrendingUp} active={activeAction === 'refund'} onClick={() => setActiveAction('refund')} disabled={card.status === 'disabled'} />
-          <ActionButton label="Adjust" icon={Pencil} active={activeAction === 'adjust'} onClick={() => setActiveAction('adjust')} disabled={card.status === 'disabled'} />
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+          <ActionButton label="Redeem" icon={TrendingDown} active={activeAction === 'redeem'} onClick={() => setActiveAction('redeem')} disabled={card.status !== 'active' || card.pending_transfer !== null} />
+          <ActionButton label="Top up" icon={Wallet} active={activeAction === 'topup'} onClick={() => setActiveAction('topup')} disabled={card.status === 'disabled' || card.pending_transfer !== null} />
+          <ActionButton label="Refund" icon={TrendingUp} active={activeAction === 'refund'} onClick={() => setActiveAction('refund')} disabled={card.status === 'disabled' || card.pending_transfer !== null} />
+          <ActionButton label="Adjust" icon={Pencil} active={activeAction === 'adjust'} onClick={() => setActiveAction('adjust')} disabled={card.status === 'disabled' || card.pending_transfer !== null} />
+          <ActionButton label="Send as gift" icon={Gift} active={false} onClick={onTransfer} disabled={card.status !== 'active' || card.pending_transfer !== null} />
         </div>
 
         {activeAction && (
@@ -824,5 +1185,161 @@ function ActionButton({ label, icon: Icon, active, onClick, disabled }: { label:
       <Icon className="h-3.5 w-3.5" />
       {label}
     </button>
+  );
+}
+
+function DesignTile({ design, selected, onClick }: { design: Design; selected: boolean; onClick: () => void }) {
+  const Icon = designIcon(design.icon);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative flex aspect-square flex-col items-center justify-center overflow-hidden rounded-lg border text-[10px] font-semibold transition ${
+        selected ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-gray-200 hover:border-gray-300 dark:border-gray-700'
+      }`}
+      style={{ backgroundImage: `linear-gradient(135deg, ${design.background_from}, ${design.background_to})`, color: design.text_color }}
+      title={design.name}
+      aria-label={`Use ${design.name} design`}
+    >
+      <Icon className="mb-1 h-5 w-5" />
+      <span className="truncate px-1">{design.name}</span>
+    </button>
+  );
+}
+
+function TransferModal({ card, onClose, onSent }: { card: GiftCard; onClose: () => void; onSent: () => Promise<void> }) {
+  const [form, setForm] = useState<TransferForm>(EMPTY_TRANSFER);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ accept_url: string; verification_token: string; expires_at: string } | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const res = await api.giftcards.transfer(card.giftcard_id, {
+        to_recipient_name: form.to_recipient_name,
+        to_recipient_email: form.to_recipient_email,
+        to_recipient_phone: form.to_recipient_phone,
+        message: form.message,
+        channel: form.channel,
+      });
+      const data = res.data as Record<string, unknown> | undefined;
+      setResult({
+        accept_url: String(data?.accept_url ?? ''),
+        verification_token: String(data?.verification_token ?? ''),
+        expires_at: String(data?.expires_at ?? ''),
+      });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to request transfer', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function copyLink() {
+    if (!result) return;
+    const url = window.location.origin + result.accept_url;
+    void navigator.clipboard?.writeText(url).then(() => showToast('Link copied to clipboard'));
+  }
+
+  return (
+    <Modal isOpen={true} onClose={() => (busy ? undefined : onClose())} title={`Send as gift — ${card.masked_code}`} size="md">
+      {result ? (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-900/30">
+            <p className="flex items-center gap-2 text-sm font-bold text-emerald-800 dark:text-emerald-200">
+              <Gift className="h-4 w-4" /> Transfer link ready
+            </p>
+            <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
+              Share this link with the recipient. When they accept, the gift card code rotates and the old code stops working. The balance is frozen until they accept (or you cancel).
+            </p>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-[11px] text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 break-all">
+            {window.location.origin}{result.accept_url}
+          </div>
+          {result.expires_at && (
+            <p className="text-[11px] text-gray-500">Expires {new Date(result.expires_at).toLocaleString()}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={copyLink} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700">
+              Copy link
+            </button>
+            <button type="button" onClick={() => void onSent()} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+              Done
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-4">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+            <p className="font-semibold">How transfer works</p>
+            <p className="mt-0.5">
+              The recipient opens a one-time link to accept. When they do, a brand-new code is generated for them and the current code stops working. The balance is frozen during the transfer window.
+            </p>
+          </div>
+
+          <Field label="Recipient name">
+            <input
+              value={form.to_recipient_name}
+              onChange={(e) => setForm({ ...form, to_recipient_name: e.target.value })}
+              placeholder="Alice Smith"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+            />
+          </Field>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Recipient email">
+              <input
+                type="email"
+                value={form.to_recipient_email}
+                onChange={(e) => setForm({ ...form, to_recipient_email: e.target.value })}
+                placeholder="alice@example.com"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </Field>
+            <Field label="Recipient phone">
+              <input
+                type="tel"
+                value={form.to_recipient_phone}
+                onChange={(e) => setForm({ ...form, to_recipient_phone: e.target.value })}
+                placeholder="07XX XXX XXX"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </Field>
+          </div>
+
+          <Field label="Personal message (optional)">
+            <textarea
+              value={form.message}
+              onChange={(e) => setForm({ ...form, message: e.target.value })}
+              rows={2}
+              placeholder="Happy birthday Alice!"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+            />
+          </Field>
+
+          <Field label="Delivery channel">
+            <select
+              value={form.channel}
+              onChange={(e) => setForm({ ...form, channel: e.target.value as TransferForm['channel'] })}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+            >
+              <option value="link">Link only (you copy & share)</option>
+              <option value="email">Email (requires recipient email)</option>
+              <option value="sms">SMS (requires recipient phone)</option>
+            </select>
+          </Field>
+
+          <div className="flex justify-end gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+            <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+              Cancel
+            </button>
+            <button type="submit" disabled={busy} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">
+              {busy ? 'Requesting…' : 'Generate transfer link'}
+            </button>
+          </div>
+        </form>
+      )}
+    </Modal>
   );
 }
