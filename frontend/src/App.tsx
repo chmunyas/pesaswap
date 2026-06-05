@@ -42,6 +42,8 @@ const PreviewPage                = lazy(() => import('./pages/PreviewPage').then
 const PublicGiftCardPage         = lazy(() => import('./pages/PublicGiftCardPage').then((m) => ({ default: m.PublicGiftCardPage })));
 const TicketsPage                = lazy(() => import('./pages/TicketsPage').then((m) => ({ default: m.TicketsPage })));
 const TicketsDashboardPage       = lazy(() => import('./pages/TicketsDashboardPage').then((m) => ({ default: m.TicketsDashboardPage })));
+const TicketPromosPage           = lazy(() => import('./pages/TicketPromosPage').then((m) => ({ default: m.TicketPromosPage })));
+const TicketReportsPage          = lazy(() => import('./pages/TicketReportsPage').then((m) => ({ default: m.TicketReportsPage })));
 const CheckinPage                = lazy(() => import('./pages/CheckinPage').then((m) => ({ default: m.CheckinPage })));
 const PublicTicketPage           = lazy(() => import('./pages/PublicTicketPage').then((m) => ({ default: m.PublicTicketPage })));
 
@@ -98,6 +100,8 @@ function AppRoutes() {
           <Route path="/giftcards" element={<GiftCardsPage />} />
           <Route path="/tickets" element={<TicketsPage />} />
           <Route path="/tickets/dashboard" element={<TicketsDashboardPage />} />
+          <Route path="/tickets/promos" element={<TicketPromosPage />} />
+          <Route path="/tickets/reports" element={<TicketReportsPage />} />
           <Route path="/checkin" element={<CheckinPage />} />
           <Route path="/expenses" element={<ExpensesPage />} />
           <Route path="/cashups" element={<CashupsPage />} />

@@ -157,6 +157,21 @@ $routes->group('api', static function ($routes) {
     $routes->get('tickets/dashboard', 'Api\TicketsController::ticketDashboard');
     $routes->post('tickets/bulk-issue', 'Api\TicketsController::ticketBulkIssue');
 
+    // Tickets — Phase 5: promos + bundles + seat holds + reports
+    $routes->get('ticket-promos', 'Api\TicketsController::promoIndex');
+    $routes->post('ticket-promos', 'Api\TicketsController::promoCreate');
+    $routes->put('ticket-promos/(:num)', 'Api\TicketsController::promoUpdate/$1');
+    $routes->delete('ticket-promos/(:num)', 'Api\TicketsController::promoDelete/$1');
+    $routes->post('ticket-promos/validate', 'Api\TicketsController::promoValidate');
+    $routes->get('ticket-products/(:num)/bundles', 'Api\TicketsController::bundleIndex/$1');
+    $routes->post('ticket-products/(:num)/bundles', 'Api\TicketsController::bundleCreate/$1');
+    $routes->delete('ticket-products/(:num)/bundles/(:num)', 'Api\TicketsController::bundleDelete/$1/$2');
+    $routes->post('seat-holds', 'Api\TicketsController::seatHoldCreate');
+    $routes->post('seat-holds/release', 'Api\TicketsController::seatHoldRelease');
+    $routes->get('reports/tickets/sales', 'Api\TicketsController::reportsTicketSales');
+    $routes->get('reports/tickets/redemptions', 'Api\TicketsController::reportsTicketRedemptions');
+    $routes->get('reports/tickets/no-shows', 'Api\TicketsController::reportsTicketNoShows');
+
     // PUBLIC endpoints — no auth required. Customer-safe data only.
     $routes->get('public/menu/(:segment)', 'Api\PublicController::menu/$1');
     $routes->get('public/giftcards/balance/(:segment)', 'Api\PublicController::giftcardBalance/$1');
@@ -206,4 +221,9 @@ $routes->group('api', static function ($routes) {
     $routes->options('public/tickets/(:segment)', 'Api\PublicController::preflight');
     $routes->options('public/tickets/(:segment)/(:any)', 'Api\PublicController::preflight');
     $routes->options('public/tickets/(:segment)/(:any)/(:any)', 'Api\PublicController::preflight');
+    $routes->options('ticket-promos', 'Api\TicketsController::preflight');
+    $routes->options('ticket-promos/(:any)', 'Api\TicketsController::preflight');
+    $routes->options('seat-holds', 'Api\TicketsController::preflight');
+    $routes->options('seat-holds/(:any)', 'Api\TicketsController::preflight');
+    $routes->options('reports/tickets/(:any)', 'Api\TicketsController::preflight');
 });

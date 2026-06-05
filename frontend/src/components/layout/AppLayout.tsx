@@ -3,7 +3,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useTheme } from '../../hooks/useTheme';
 import { MobileBottomNav } from './MobileBottomNav';
 import { useI18n, LOCALE_LABELS, type Locale } from '../../lib/i18n';
-import { Activity, ChefHat, Coffee, FileText, Languages, Calendar, Globe2, ScanLine, Smartphone, Ticket } from 'lucide-react';
+import { Activity, ChefHat, Coffee, FileText, Languages, Calendar, Globe2, ScanLine, Smartphone, Tag, Ticket } from 'lucide-react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -40,6 +40,8 @@ const navItems = [
   { to: '/giftcards', icon: CreditCard, label: 'Gift Cards', group: 'main' },
   { to: '/tickets', icon: Ticket, label: 'Ticketing', group: 'main' },
   { to: '/tickets/dashboard', icon: Activity, label: 'Gate Dashboard', group: 'main' },
+  { to: '/tickets/promos', icon: Tag, label: 'Ticket Promos', group: 'main' },
+  { to: '/tickets/reports', icon: BarChart3, label: 'Ticket Reports', group: 'office' },
   { to: '/checkin', icon: ScanLine, label: 'Gate Scanner', group: 'main' },
   { to: '/qr', icon: QrCode, label: 'QR Codes', group: 'main' },
   { to: '/kds', icon: ChefHat, label: 'Kitchen Display', group: 'main' },

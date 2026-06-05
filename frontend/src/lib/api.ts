@@ -260,5 +260,23 @@ export const api = {
       request<ApiResponse<EntityPayload>>('/tickets/bulk-issue', { method: 'POST', body: JSON.stringify(data) }),
     resendDelivery: (id: number, data: ApiData) =>
       request<ApiResponse<EntityPayload>>(`/tickets/${id}/resend-delivery`, { method: 'POST', body: JSON.stringify(data) }),
+    promos: {
+      list: () => request<ApiResponse<EntityPayload>>('/ticket-promos'),
+      create: (data: ApiData) => request<ApiResponse<EntityPayload>>('/ticket-promos', { method: 'POST', body: JSON.stringify(data) }),
+      update: (id: number, data: ApiData) => request<ApiResponse<EntityPayload>>(`/ticket-promos/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+      delete: (id: number) => request<ApiResponse<EntityPayload>>(`/ticket-promos/${id}`, { method: 'DELETE' }),
+      validate: (data: ApiData) => request<ApiResponse<EntityPayload>>('/ticket-promos/validate', { method: 'POST', body: JSON.stringify(data) }),
+    },
+    seatHolds: {
+      create: (data: ApiData) => request<ApiResponse<EntityPayload>>('/seat-holds', { method: 'POST', body: JSON.stringify(data) }),
+      release: (data: ApiData) => request<ApiResponse<EntityPayload>>('/seat-holds/release', { method: 'POST', body: JSON.stringify(data) }),
+    },
+    reports: {
+      sales: (from?: string, to?: string) =>
+        request<ApiResponse<EntityPayload>>(`/reports/tickets/sales${from || to ? '?' : ''}${from ? `from=${encodeURIComponent(from)}` : ''}${from && to ? '&' : ''}${to ? `to=${encodeURIComponent(to)}` : ''}`),
+      redemptions: (from?: string, to?: string) =>
+        request<ApiResponse<EntityPayload>>(`/reports/tickets/redemptions${from || to ? '?' : ''}${from ? `from=${encodeURIComponent(from)}` : ''}${from && to ? '&' : ''}${to ? `to=${encodeURIComponent(to)}` : ''}`),
+      noShows: () => request<ApiResponse<EntityPayload>>('/reports/tickets/no-shows'),
+    },
   },
 };

@@ -2711,4 +2711,627 @@ class TicketsController extends BaseApiController
 
         return array_values(array_filter(array_map(static fn ($v) => (int) trim($v), explode(',', $csv)), static fn ($v) => $v > 0));
     }
+
+    // ========================================================================
+    // Phase 5 — promo codes, bundles, seat holds, reports
+    // ========================================================================
+
+    private function phase5MigrationApplied(): bool
+    {
+        return $this->phase2MigrationApplied()
+            && $this->db->tableExists('ticket_promo_codes')
+            && $this->db->tableExists('ticket_product_bundles')
+            && $this->db->tableExists('ticket_seat_holds');
+    }
+
+    // ---------- promo codes ----------
+
+    public function promoIndex(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        try {
+            $rows = $this->db->table('ticket_promo_codes')
+                ->where('deleted', 0)
+                ->orderBy('code_id', 'DESC')
+                ->limit(200)
+                ->get()
+                ->getResultArray();
+
+            return $this->respondSuccess(['promos' => array_map(fn (array $r) => $this->decoratePromo($r), $rows)]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::promoIndex — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load promo codes.', 500);
+        }
+    }
+
+    public function promoCreate(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $err  = $this->validatePromoPayload($body, true);
+        if (is_string($err)) {
+            return $this->respondError($err, 422);
+        }
+
+        try {
+            $row = $this->buildPromoRow($body);
+            $this->db->table('ticket_promo_codes')->insert($row);
+            $id    = (int) $this->db->insertID();
+            $fresh = $this->db->table('ticket_promo_codes')->where('code_id', $id)->get()->getRowArray();
+
+            return $this->respondSuccess(['promo' => $fresh ? $this->decoratePromo($fresh) : null], 'Promo code created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::promoCreate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to create promo code.', 500);
+        }
+    }
+
+    public function promoUpdate(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $err  = $this->validatePromoPayload($body, false);
+        if (is_string($err)) {
+            return $this->respondError($err, 422);
+        }
+
+        try {
+            $patch = $this->buildPromoRow($body);
+            unset($patch['used_count']);
+            $this->db->table('ticket_promo_codes')->where('code_id', $id)->update($patch);
+            $fresh = $this->db->table('ticket_promo_codes')->where('code_id', $id)->get()->getRowArray();
+
+            return $this->respondSuccess(['promo' => $fresh ? $this->decoratePromo($fresh) : null], 'Promo code updated.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::promoUpdate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to update promo code.', 500);
+        }
+    }
+
+    public function promoDelete(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        try {
+            $this->db->table('ticket_promo_codes')->where('code_id', $id)->update(['deleted' => 1]);
+
+            return $this->respondSuccess(['code_id' => $id], 'Promo code archived.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::promoDelete — ' . $e->getMessage());
+
+            return $this->respondError('Failed to delete promo code.', 500);
+        }
+    }
+
+    /**
+     * Dry-run promo validation. Body: { code, product_id?, tier_id?, amount? }
+     * Returns: { valid, reason?, discount_pct, discount_flat, applied_amount }
+     */
+    public function promoValidate(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        $body      = $this->request->getJSON(true) ?? [];
+        $code      = strtoupper(trim((string) ($body['code'] ?? '')));
+        $productId = (int) ($body['product_id'] ?? 0);
+        $tierId    = (int) ($body['tier_id'] ?? 0);
+        $amount    = $this->parseMoney($body['amount'] ?? '0');
+        if ($code === '') {
+            return $this->respondError('code is required.', 422);
+        }
+
+        $promo = $this->db->table('ticket_promo_codes')->where('code', $code)->where('deleted', 0)->get()->getRowArray();
+        if ($promo === null) {
+            return $this->respondSuccess(['valid' => false, 'reason' => 'not_found']);
+        }
+
+        $check = $this->checkPromoEligibility($promo, $productId, $tierId, $amount);
+        if ($check !== null) {
+            return $this->respondSuccess(['valid' => false, 'reason' => $check]);
+        }
+
+        $applied = $this->computePromoAmount($promo, $amount ?? '0.00');
+
+        return $this->respondSuccess([
+            'valid'          => true,
+            'code_id'        => (int) $promo['code_id'],
+            'discount_pct'   => $promo['discount_pct'],
+            'discount_flat'  => $promo['discount_flat'],
+            'currency'       => $promo['currency'],
+            'applied_amount' => $applied,
+            'remaining_uses' => $promo['max_uses'] !== null ? max(0, (int) $promo['max_uses'] - (int) $promo['used_count']) : null,
+        ]);
+    }
+
+    // ---------- bundles ----------
+
+    public function bundleIndex(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        try {
+            $bundlesTable  = $this->db->prefixTable('ticket_product_bundles');
+            $productsTable = $this->db->prefixTable('ticket_products');
+            $rows          = $this->db->query(
+                "SELECT b.*, p.title AS child_title
+                 FROM {$bundlesTable} b
+                 LEFT JOIN {$productsTable} p ON p.ticket_product_id = b.child_product_id
+                 WHERE b.parent_product_id = ? AND b.deleted = 0
+                 ORDER BY b.sort_order ASC, b.bundle_id ASC",
+                [$productId],
+            )->getResultArray();
+
+            return $this->respondSuccess(['bundles' => array_map(fn (array $r) => $this->decorateBundle($r), $rows)]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::bundleIndex — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load bundles.', 500);
+        }
+    }
+
+    public function bundleCreate(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        $body         = $this->request->getJSON(true) ?? [];
+        $childProduct = (int) ($body['child_product_id'] ?? 0);
+        if ($childProduct <= 0) {
+            return $this->respondError('child_product_id is required.', 422);
+        }
+        if ($childProduct === $productId) {
+            return $this->respondError('Bundle child cannot be the parent.', 422);
+        }
+
+        try {
+            $this->db->table('ticket_product_bundles')->insert([
+                'parent_product_id' => $productId,
+                'child_product_id'  => $childProduct,
+                'child_tier_id'     => $this->intOrNull($body['child_tier_id'] ?? null),
+                'child_session_id'  => $this->intOrNull($body['child_session_id'] ?? null),
+                'quantity'          => max(1, (int) ($body['quantity'] ?? 1)),
+                'sort_order'        => (int) ($body['sort_order'] ?? 0),
+            ]);
+
+            return $this->respondSuccess(['bundle_id' => (int) $this->db->insertID()], 'Bundle entry created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::bundleCreate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to create bundle.', 500);
+        }
+    }
+
+    public function bundleDelete(int $productId, int $bundleId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+
+        try {
+            $this->db->table('ticket_product_bundles')
+                ->where('parent_product_id', $productId)
+                ->where('bundle_id', $bundleId)
+                ->update(['deleted' => 1]);
+
+            return $this->respondSuccess(['bundle_id' => $bundleId], 'Bundle entry deleted.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::bundleDelete — ' . $e->getMessage());
+
+            return $this->respondError('Failed to delete bundle.', 500);
+        }
+    }
+
+    // ---------- seat holds (public + authenticated) ----------
+
+    /**
+     * POST /api/seat-holds — body: { product_id, session_id?, seats: [code,...] }
+     * Returns: { hold_token, expires_at, seats }
+     *
+     * Public so the customer checkout flow can reserve before paying.
+     * Rate-limited per IP to defeat seat squatting.
+     */
+    public function seatHoldCreate(): ResponseInterface
+    {
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+        if (! $this->publicRateLimit('seat_hold', 30, 60)) {
+            return $this->respondError('Too many hold requests.', 429);
+        }
+
+        $body      = $this->request->getJSON(true) ?? [];
+        $productId = (int) ($body['product_id'] ?? 0);
+        $sessionId = (int) ($body['session_id'] ?? 0);
+        $seats     = is_array($body['seats'] ?? null) ? array_values(array_filter($body['seats'], 'is_string')) : [];
+        if ($productId <= 0 || $seats === []) {
+            return $this->respondError('product_id and non-empty seats[] are required.', 422);
+        }
+        if (count($seats) > 20) {
+            return $this->respondError('Too many seats per hold (max 20).', 422);
+        }
+
+        $ttlMin  = max(1, (int) $this->getAppConfig('ticket_seat_hold_ttl_min', '10'));
+        $expires = (new DateTimeImmutable())->modify("+{$ttlMin} minutes");
+        $token   = bin2hex(random_bytes(32));
+
+        try {
+            $this->db->transBegin();
+            $now = date('Y-m-d H:i:s');
+
+            // Conflict check — any active hold or consumed seat for the same session+seat?
+            $holdsTable = $this->db->prefixTable('ticket_seat_holds');
+            $params     = [$productId, $sessionId > 0 ? $sessionId : null];
+            $rows       = $this->db->query(
+                "SELECT seat_code FROM {$holdsTable}
+                 WHERE product_id = ?
+                   AND (session_id <=> ?)
+                   AND consumed_at IS NULL
+                   AND released_at IS NULL
+                   AND held_until > NOW()
+                   AND seat_code IN (" . implode(',', array_fill(0, count($seats), '?')) . ')',
+                array_merge($params, $seats),
+            )->getResultArray();
+            if (! empty($rows)) {
+                $this->db->transRollback();
+
+                return $this->respondError('Some seats are already held: ' . implode(', ', array_column($rows, 'seat_code')), 409);
+            }
+
+            foreach ($seats as $seatCode) {
+                $this->db->table('ticket_seat_holds')->insert([
+                    'session_id' => $sessionId > 0 ? $sessionId : null,
+                    'product_id' => $productId,
+                    'seat_code'  => mb_substr($seatCode, 0, 64),
+                    'hold_token' => $token,
+                    'held_until' => $expires->format('Y-m-d H:i:s'),
+                    'held_by_ip' => $this->request->getIPAddress() ?: null,
+                    'created_at' => $now,
+                ]);
+            }
+
+            if (! $this->db->transCommit()) {
+                return $this->respondError('Failed to create hold.', 500);
+            }
+
+            return $this->respondSuccess([
+                'hold_token' => $token,
+                'expires_at' => $expires->format('c'),
+                'seats'      => $seats,
+            ], 'Seats held.', 201);
+        } catch (Throwable $e) {
+            try {
+                $this->db->transRollback();
+            } catch (Throwable $ignore) {
+            }
+            log_message('error', 'TicketsController::seatHoldCreate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to create hold.', 500);
+        }
+    }
+
+    public function seatHoldRelease(): ResponseInterface
+    {
+        if (! $this->phase5MigrationApplied()) {
+            return $this->respondError('Phase 5 migration is required.', 503);
+        }
+        $body  = $this->request->getJSON(true) ?? [];
+        $token = (string) ($body['hold_token'] ?? '');
+        if ($token === '') {
+            return $this->respondError('hold_token is required.', 422);
+        }
+
+        try {
+            $this->db->table('ticket_seat_holds')
+                ->where('hold_token', $token)
+                ->where('consumed_at IS NULL', null, false)
+                ->update(['released_at' => date('Y-m-d H:i:s')]);
+
+            return $this->respondSuccess(['hold_token' => $token], 'Hold released.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::seatHoldRelease — ' . $e->getMessage());
+
+            return $this->respondError('Failed to release hold.', 500);
+        }
+    }
+
+    // ---------- reports ----------
+
+    /**
+     * GET /api/reports/tickets/sales — daily sales count + revenue
+     * grouped by product. Optional ?from=&to= filter.
+     */
+    public function reportsTicketSales(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+
+        $from = $this->parseDateTime($this->request->getGet('from')) ?? date('Y-m-d 00:00:00', strtotime('-30 days'));
+        $to   = $this->parseDateTime($this->request->getGet('to')) ?? date('Y-m-d 23:59:59');
+
+        try {
+            $ticketsTable  = $this->db->prefixTable('tickets');
+            $productsTable = $this->db->prefixTable('ticket_products');
+            $rows          = $this->db->query(
+                "SELECT
+                    p.ticket_product_id, p.title, p.subtype,
+                    DATE(t.issued_at) AS day,
+                    COUNT(*) AS issued_count
+                 FROM {$ticketsTable} t
+                 LEFT JOIN {$productsTable} p ON p.ticket_product_id = t.ticket_product_id
+                 WHERE t.deleted = 0
+                   AND t.issued_at BETWEEN ? AND ?
+                 GROUP BY p.ticket_product_id, DATE(t.issued_at)
+                 ORDER BY day DESC, issued_count DESC",
+                [$from, $to],
+            )->getResultArray();
+
+            return $this->respondSuccess(['from' => $from, 'to' => $to, 'rows' => $rows]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::reportsTicketSales — ' . $e->getMessage());
+
+            return $this->respondError('Report failed.', 500);
+        }
+    }
+
+    /**
+     * GET /api/reports/tickets/redemptions — scan velocity + result histogram.
+     */
+    public function reportsTicketRedemptions(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+
+        $from = $this->parseDateTime($this->request->getGet('from')) ?? date('Y-m-d 00:00:00', strtotime('-7 days'));
+        $to   = $this->parseDateTime($this->request->getGet('to')) ?? date('Y-m-d 23:59:59');
+
+        try {
+            $redemptionsTable = $this->db->prefixTable('ticket_redemptions');
+            $byResult         = $this->db->query(
+                "SELECT result, COUNT(*) AS count
+                 FROM {$redemptionsTable}
+                 WHERE occurred_at BETWEEN ? AND ?
+                 GROUP BY result
+                 ORDER BY count DESC",
+                [$from, $to],
+            )->getResultArray();
+
+            $byHour = $this->db->query(
+                "SELECT DATE_FORMAT(occurred_at, '%Y-%m-%d %H:00:00') AS hour,
+                        SUM(CASE WHEN result = 'ok' THEN 1 ELSE 0 END) AS ok,
+                        COUNT(*) AS total
+                 FROM {$redemptionsTable}
+                 WHERE occurred_at BETWEEN ? AND ?
+                 GROUP BY hour
+                 ORDER BY hour ASC",
+                [$from, $to],
+            )->getResultArray();
+
+            return $this->respondSuccess(['from' => $from, 'to' => $to, 'by_result' => $byResult, 'by_hour' => $byHour]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::reportsTicketRedemptions — ' . $e->getMessage());
+
+            return $this->respondError('Report failed.', 500);
+        }
+    }
+
+    /**
+     * GET /api/reports/tickets/no-shows — tickets sold but never scanned,
+     * grouped by product. Only counts tickets whose valid_to has passed.
+     */
+    public function reportsTicketNoShows(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+
+        try {
+            $ticketsTable  = $this->db->prefixTable('tickets');
+            $productsTable = $this->db->prefixTable('ticket_products');
+            $rows          = $this->db->query(
+                "SELECT
+                    p.ticket_product_id, p.title, p.subtype,
+                    SUM(CASE WHEN t.status IN ('issued','active') AND (t.valid_to IS NULL OR t.valid_to < NOW()) THEN 1 ELSE 0 END) AS no_shows,
+                    SUM(CASE WHEN t.status = 'redeemed' THEN 1 ELSE 0 END) AS redeemed,
+                    COUNT(*) AS total
+                 FROM {$ticketsTable} t
+                 LEFT JOIN {$productsTable} p ON p.ticket_product_id = t.ticket_product_id
+                 WHERE t.deleted = 0
+                 GROUP BY p.ticket_product_id
+                 HAVING total > 0
+                 ORDER BY no_shows DESC",
+            )->getResultArray();
+
+            return $this->respondSuccess(['rows' => $rows]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::reportsTicketNoShows — ' . $e->getMessage());
+
+            return $this->respondError('Report failed.', 500);
+        }
+    }
+
+    // --- Phase 5 helpers ---
+
+    private function decoratePromo(array $row): array
+    {
+        return [
+            'code_id'           => (int) $row['code_id'],
+            'code'              => (string) $row['code'],
+            'description'       => $row['description'],
+            'discount_pct'      => $row['discount_pct'] !== null ? (string) $row['discount_pct'] : null,
+            'discount_flat'     => $row['discount_flat'] !== null ? (string) $row['discount_flat'] : null,
+            'currency'          => $row['currency'],
+            'max_uses'          => $row['max_uses'] !== null ? (int) $row['max_uses'] : null,
+            'used_count'        => (int) $row['used_count'],
+            'remaining_uses'    => $row['max_uses'] !== null ? max(0, (int) $row['max_uses'] - (int) $row['used_count']) : null,
+            'starts_at'         => $row['starts_at'],
+            'expires_at'        => $row['expires_at'],
+            'scope_product_ids' => $this->csvToIntList((string) ($row['scope_product_ids'] ?? '')),
+            'scope_tier_ids'    => $this->csvToIntList((string) ($row['scope_tier_ids'] ?? '')),
+            'min_amount'        => $row['min_amount'] !== null ? (string) $row['min_amount'] : null,
+        ];
+    }
+
+    private function decorateBundle(array $row): array
+    {
+        return [
+            'bundle_id'         => (int) $row['bundle_id'],
+            'parent_product_id' => (int) $row['parent_product_id'],
+            'child_product_id'  => (int) $row['child_product_id'],
+            'child_title'       => $row['child_title'] ?? null,
+            'child_tier_id'     => $row['child_tier_id'] !== null ? (int) $row['child_tier_id'] : null,
+            'child_session_id'  => $row['child_session_id'] !== null ? (int) $row['child_session_id'] : null,
+            'quantity'          => (int) $row['quantity'],
+            'sort_order'        => (int) $row['sort_order'],
+        ];
+    }
+
+    private function validatePromoPayload(array $body, bool $isCreate): string|true
+    {
+        if ($isCreate) {
+            $code = strtoupper(trim((string) ($body['code'] ?? '')));
+            if ($code === '') {
+                return 'code is required.';
+            }
+            if (! preg_match('/^[A-Z0-9_-]{3,64}$/', $code)) {
+                return 'code may only contain A-Z 0-9 _ -, length 3-64.';
+            }
+        }
+        $pct  = $body['discount_pct'] ?? null;
+        $flat = $body['discount_flat'] ?? null;
+        if ($pct === null && $flat === null) {
+            return 'discount_pct or discount_flat is required.';
+        }
+        if ($pct !== null && (! is_numeric($pct) || (float) $pct <= 0 || (float) $pct > 100)) {
+            return 'discount_pct must be a number 0 < pct <= 100.';
+        }
+        if ($flat !== null && ! $this->isValidMoney((string) $flat)) {
+            return 'discount_flat must be a non-negative decimal.';
+        }
+
+        return true;
+    }
+
+    private function buildPromoRow(array $body): array
+    {
+        return [
+            'code'              => isset($body['code']) ? strtoupper(trim((string) $body['code'])) : null,
+            'description'       => $this->stringOrNull($body['description'] ?? null, 255),
+            'discount_pct'      => isset($body['discount_pct']) && $body['discount_pct'] !== null ? (string) $body['discount_pct'] : null,
+            'discount_flat'     => isset($body['discount_flat']) && $body['discount_flat'] !== null ? $this->parseMoney($body['discount_flat']) : null,
+            'currency'          => $this->stringOrNull($body['currency'] ?? null, 8),
+            'max_uses'          => $this->intOrNull($body['max_uses'] ?? null),
+            'starts_at'         => $this->parseDateTime($body['starts_at'] ?? null),
+            'expires_at'        => $this->parseDateTime($body['expires_at'] ?? null),
+            'scope_product_ids' => isset($body['scope_product_ids']) && is_array($body['scope_product_ids'])
+                ? implode(',', array_map('intval', $body['scope_product_ids']))
+                : null,
+            'scope_tier_ids' => isset($body['scope_tier_ids']) && is_array($body['scope_tier_ids'])
+                ? implode(',', array_map('intval', $body['scope_tier_ids']))
+                : null,
+            'min_amount' => isset($body['min_amount']) && $body['min_amount'] !== null ? $this->parseMoney($body['min_amount']) : null,
+        ];
+    }
+
+    private function checkPromoEligibility(array $promo, int $productId, int $tierId, ?string $amount): ?string
+    {
+        $now = time();
+        if (! empty($promo['starts_at']) && strtotime((string) $promo['starts_at']) > $now) {
+            return 'not_started';
+        }
+        if (! empty($promo['expires_at']) && strtotime((string) $promo['expires_at']) < $now) {
+            return 'expired';
+        }
+        if ($promo['max_uses'] !== null && (int) $promo['used_count'] >= (int) $promo['max_uses']) {
+            return 'sold_out';
+        }
+        if (! empty($promo['scope_product_ids']) && $productId > 0) {
+            $allowed = $this->csvToIntList((string) $promo['scope_product_ids']);
+            if ($allowed !== [] && ! in_array($productId, $allowed, true)) {
+                return 'wrong_product';
+            }
+        }
+        if (! empty($promo['scope_tier_ids']) && $tierId > 0) {
+            $allowed = $this->csvToIntList((string) $promo['scope_tier_ids']);
+            if ($allowed !== [] && ! in_array($tierId, $allowed, true)) {
+                return 'wrong_tier';
+            }
+        }
+        if (! empty($promo['min_amount']) && $amount !== null && bccomp($amount, (string) $promo['min_amount'], 2) < 0) {
+            return 'below_min';
+        }
+
+        return null;
+    }
+
+    private function computePromoAmount(array $promo, string $amount): string
+    {
+        $applied = '0.00';
+        if (! empty($promo['discount_pct'])) {
+            $pct     = (string) $promo['discount_pct'];
+            $applied = bcmul($amount, bcdiv($pct, '100', 4), 2);
+        }
+        if (! empty($promo['discount_flat'])) {
+            $flat    = (string) $promo['discount_flat'];
+            $applied = bcadd($applied, $flat, 2);
+        }
+        if (bccomp($applied, $amount, 2) > 0) {
+            $applied = $amount;
+        }
+
+        return $applied;
+    }
 }
