@@ -2378,4 +2378,337 @@ class TicketsController extends BaseApiController
 
         return implode("\r\n", $lines) . "\r\n";
     }
+
+    // ========================================================================
+    // Phase 4 — scanner devices, dashboard, bulk-issue
+    // ========================================================================
+
+    private function phase4MigrationApplied(): bool
+    {
+        return $this->phase2MigrationApplied()
+            && $this->db->tableExists('ticket_scanner_devices');
+    }
+
+    public function scannerDeviceIndex(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase4MigrationApplied()) {
+            return $this->respondError('Scanner devices migration is required.', 503);
+        }
+
+        try {
+            $rows = $this->db->table('ticket_scanner_devices')
+                ->select('device_id, label, scope_location_ids, scope_product_ids, created_by_employee_id, created_at, last_seen_at, last_seen_ip, revoked_at, revoked_reason')
+                ->orderBy('revoked_at', 'ASC')
+                ->orderBy('device_id', 'DESC')
+                ->limit(200)
+                ->get()
+                ->getResultArray();
+
+            return $this->respondSuccess(['devices' => array_map(fn (array $r) => $this->decorateDevice($r), $rows)]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::scannerDeviceIndex — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load scanner devices.', 500);
+        }
+    }
+
+    /**
+     * Mint a long-lived RS256 JWT for a new gate scanner device. The
+     * token is returned exactly once — the server only stores the jti
+     * (so it can be revoked by setting revoked_at without invalidating
+     * other devices' tokens) plus the optional scope claims.
+     */
+    public function scannerDeviceCreate(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase4MigrationApplied()) {
+            return $this->respondError('Scanner devices migration is required.', 503);
+        }
+
+        $body  = $this->request->getJSON(true) ?? [];
+        $label = trim((string) ($body['label'] ?? ''));
+        if ($label === '') {
+            return $this->respondError('label is required.', 422);
+        }
+        if (mb_strlen($label) > 128) {
+            return $this->respondError('label is too long.', 422);
+        }
+
+        $locationIds = $this->sanitiseIdList($body['scope_location_ids'] ?? []);
+        $productIds  = $this->sanitiseIdList($body['scope_product_ids'] ?? []);
+        $ttlDays     = max(1, min(365 * 2, (int) ($body['ttl_days'] ?? 90)));
+
+        try {
+            $jti = bin2hex(random_bytes(16));
+
+            $this->db->table('ticket_scanner_devices')->insert([
+                'label'                  => mb_substr($label, 0, 128),
+                'jti'                    => $jti,
+                'scope_location_ids'     => $locationIds === [] ? null : implode(',', $locationIds),
+                'scope_product_ids'      => $productIds === [] ? null : implode(',', $productIds),
+                'created_by_employee_id' => $this->session->get('person_id'),
+            ]);
+            $deviceId = (int) $this->db->insertID();
+
+            $tokenLib = service('ticket_token_lib');
+            $expAt    = (new DateTimeImmutable())->modify("+{$ttlDays} days");
+            // Re-uses the RS256 issuer with custom claims under "scanner".
+            $token = $tokenLib->issueScanner($deviceId, $jti, $locationIds, $productIds, $expAt);
+
+            $row = $this->db->table('ticket_scanner_devices')->where('device_id', $deviceId)->get()->getRowArray();
+
+            return $this->respondSuccess([
+                'device' => $this->decorateDevice($row),
+                'token'  => $token,
+                'note'   => 'This token is shown only once. Configure the scanner with it now.',
+            ], 'Scanner device created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::scannerDeviceCreate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to create scanner device.', 500);
+        }
+    }
+
+    public function scannerDeviceRevoke(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase4MigrationApplied()) {
+            return $this->respondError('Scanner devices migration is required.', 503);
+        }
+
+        $body   = $this->request->getJSON(true) ?? [];
+        $reason = mb_substr(trim((string) ($body['reason'] ?? '')), 0, 255);
+
+        try {
+            $existing = $this->db->table('ticket_scanner_devices')->where('device_id', $id)->get()->getRowArray();
+            if ($existing === null) {
+                return $this->respondError('Scanner device not found.', 404);
+            }
+            if (! empty($existing['revoked_at'])) {
+                return $this->respondError('Scanner device already revoked.', 409);
+            }
+
+            $this->db->table('ticket_scanner_devices')->where('device_id', $id)->update([
+                'revoked_at'     => date('Y-m-d H:i:s'),
+                'revoked_reason' => $reason !== '' ? $reason : 'Manual revocation',
+            ]);
+
+            return $this->respondSuccess(['device_id' => $id], 'Scanner device revoked.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::scannerDeviceRevoke — ' . $e->getMessage());
+
+            return $this->respondError('Failed to revoke device.', 500);
+        }
+    }
+
+    /**
+     * Live gate dashboard. Per-product (and optionally per-session)
+     * counts: issued, redeemed, refunded, revoked, expired, scan
+     * velocity (last 5 min), no-show estimate.
+     */
+    public function ticketDashboard(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Phase 2 migration is required.', 503);
+        }
+
+        $productId = (int) ($this->request->getGet('ticket_product_id') ?? 0);
+        $sessionId = (int) ($this->request->getGet('session_id') ?? 0);
+
+        try {
+            $ticketsTable = $this->db->prefixTable('tickets');
+
+            $where  = ['t.deleted = 0'];
+            $params = [];
+            if ($productId > 0) {
+                $where[]  = 't.ticket_product_id = ?';
+                $params[] = $productId;
+            }
+            if ($sessionId > 0) {
+                $where[]  = 't.session_id = ?';
+                $params[] = $sessionId;
+            }
+            $whereSql = implode(' AND ', $where);
+
+            $totals = $this->db->query(
+                "SELECT
+                    SUM(CASE WHEN t.status = 'issued' THEN 1 ELSE 0 END) AS issued,
+                    SUM(CASE WHEN t.status = 'active' THEN 1 ELSE 0 END) AS active,
+                    SUM(CASE WHEN t.status = 'redeemed' THEN 1 ELSE 0 END) AS redeemed,
+                    SUM(CASE WHEN t.status = 'refunded' THEN 1 ELSE 0 END) AS refunded,
+                    SUM(CASE WHEN t.status = 'revoked' THEN 1 ELSE 0 END) AS revoked,
+                    SUM(CASE WHEN t.status = 'expired' THEN 1 ELSE 0 END) AS expired,
+                    COUNT(*) AS total
+                 FROM {$ticketsTable} t
+                 WHERE {$whereSql}",
+                $params,
+            )->getRowArray() ?? [];
+
+            $redemptionsTable = $this->db->prefixTable('ticket_redemptions');
+            $velocity         = $this->db->query(
+                "SELECT COUNT(*) AS scans_5m
+                 FROM {$redemptionsTable} r
+                 JOIN {$ticketsTable} t ON t.ticket_id = r.ticket_id
+                 WHERE r.result = 'ok'
+                   AND r.occurred_at >= (NOW() - INTERVAL 5 MINUTE)
+                   AND {$whereSql}",
+                $params,
+            )->getRowArray() ?? ['scans_5m' => 0];
+
+            $issued   = (int) ($totals['issued'] ?? 0) + (int) ($totals['active'] ?? 0);
+            $redeemed = (int) ($totals['redeemed'] ?? 0);
+            $refunded = (int) ($totals['refunded'] ?? 0);
+            $revoked  = (int) ($totals['revoked'] ?? 0);
+            $expired  = (int) ($totals['expired'] ?? 0);
+            $total    = (int) ($totals['total'] ?? 0);
+            // No-show estimate: tickets that were sold but never scanned, refunded or revoked.
+            // total - redeemed - refunded - revoked - expired = issued + active (still un-used).
+            $noShow         = max(0, $total - $redeemed - $refunded - $revoked - $expired);
+            $eligible       = max(0, $total - $refunded - $revoked);
+            $redemptionRate = $eligible > 0 ? round(($redeemed / $eligible) * 100, 1) : 0.0;
+
+            return $this->respondSuccess([
+                'totals' => [
+                    'issued'   => (int) ($totals['issued'] ?? 0),
+                    'active'   => (int) ($totals['active'] ?? 0),
+                    'redeemed' => $redeemed,
+                    'refunded' => $refunded,
+                    'revoked'  => $revoked,
+                    'expired'  => $expired,
+                    'total'    => $total,
+                ],
+                'scans_per_5min'   => (int) ($velocity['scans_5m'] ?? 0),
+                'no_show_estimate' => $noShow,
+                'redemption_rate'  => $redemptionRate,
+                'as_of'            => date('c'),
+            ]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::ticketDashboard — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load dashboard.', 500);
+        }
+    }
+
+    /**
+     * Bulk-issue from a JSON array of { ticket_product_id, session_id?,
+     * tier_id?, customer_id?, seat_assignment?, issuance_reason }.
+     * Each row is issued in its own short transaction so a single
+     * sold-out / invalid row doesn't poison the whole batch — the
+     * response lists per-row outcomes (ok vs error message).
+     */
+    public function ticketBulkIssue(): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $rows = $body['rows'] ?? null;
+        if (! is_array($rows) || $rows === []) {
+            return $this->respondError('rows[] is required (array of issue payloads).', 422);
+        }
+        if (count($rows) > 500) {
+            return $this->respondError('Batch size limit is 500 rows per request.', 422);
+        }
+
+        $results = [];
+        $okCount = 0;
+
+        foreach ($rows as $idx => $payload) {
+            if (! is_array($payload)) {
+                $results[] = ['index' => $idx, 'status' => 'error', 'message' => 'Row is not an object'];
+
+                continue;
+            }
+            $payload['issuance_reason'] = (string) ($payload['issuance_reason'] ?? 'comp');
+            // Use the existing single-issue path to keep all invariants
+            // (atomic counter UPDATE, validation, audit) consistent.
+            $fakeRequest = $this->request;
+            $original    = $fakeRequest->getBody();
+            $fakeRequest->setBody(json_encode($payload));
+            $response = $this->ticketIssue();
+            $fakeRequest->setBody($original);
+
+            $code = $response->getStatusCode();
+            $json = json_decode((string) $response->getBody(), true);
+            if ($code >= 200 && $code < 300) {
+                $okCount++;
+                $results[] = [
+                    'index'     => $idx,
+                    'status'    => 'ok',
+                    'ticket_id' => $json['data']['ticket']['ticket_id'] ?? null,
+                    'code'      => $json['data']['ticket']['code'] ?? null,
+                ];
+            } else {
+                $results[] = [
+                    'index'   => $idx,
+                    'status'  => 'error',
+                    'http'    => $code,
+                    'message' => $json['message'] ?? 'Issuance failed',
+                ];
+            }
+        }
+
+        return $this->respondSuccess([
+            'ok_count'    => $okCount,
+            'error_count' => count($rows) - $okCount,
+            'results'     => $results,
+        ], 'Bulk issuance complete.');
+    }
+
+    private function decorateDevice(array $row): array
+    {
+        return [
+            'device_id'              => (int) $row['device_id'],
+            'label'                  => (string) $row['label'],
+            'scope_location_ids'     => $this->csvToIntList((string) ($row['scope_location_ids'] ?? '')),
+            'scope_product_ids'      => $this->csvToIntList((string) ($row['scope_product_ids'] ?? '')),
+            'created_by_employee_id' => $row['created_by_employee_id'] !== null ? (int) $row['created_by_employee_id'] : null,
+            'created_at'             => (string) $row['created_at'],
+            'last_seen_at'           => $row['last_seen_at'],
+            'last_seen_ip'           => $row['last_seen_ip'],
+            'revoked_at'             => $row['revoked_at'] ?? null,
+            'revoked_reason'         => $row['revoked_reason'] ?? null,
+            'active'                 => empty($row['revoked_at']),
+        ];
+    }
+
+    private function sanitiseIdList(mixed $raw): array
+    {
+        if (! is_array($raw)) {
+            return [];
+        }
+        $out = [];
+
+        foreach ($raw as $v) {
+            $i = (int) $v;
+            if ($i > 0) {
+                $out[] = $i;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    private function csvToIntList(string $csv): array
+    {
+        if ($csv === '') {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(static fn ($v) => (int) trim($v), explode(',', $csv)), static fn ($v) => $v > 0));
+    }
 }

@@ -9,6 +9,7 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 /**
  * Ticket token library.
@@ -53,7 +54,7 @@ class Ticket_token_lib
             throw new RuntimeException('Failed to generate RSA key pair: ' . (openssl_error_string() ?: 'unknown error'));
         }
 
-        if (!openssl_pkey_export($resource, $privateKeyPem)) {
+        if (! openssl_pkey_export($resource, $privateKeyPem)) {
             throw new RuntimeException('Failed to export RSA private key: ' . (openssl_error_string() ?: 'unknown error'));
         }
 
@@ -96,9 +97,9 @@ class Ticket_token_lib
     /**
      * Issue a JWT for a ticket. Token always uses the currently-active key.
      *
-     * @param int                    $ticketId The id of the ospos_tickets row this token grants access to.
-     * @param DateTimeInterface|null $expiresAt When the token expires. Defaults to ticket.valid_to or +1 year.
-     * @param string|null            $jti       Optional JWT ID; auto-generated random when null.
+     * @param int                    $ticketId    The id of the ospos_tickets row this token grants access to.
+     * @param DateTimeInterface|null $expiresAt   When the token expires. Defaults to ticket.valid_to or +1 year.
+     * @param string|null            $jti         Optional JWT ID; auto-generated random when null.
      * @param array<string,mixed>    $extraClaims Additional non-reserved claims to embed.
      */
     public function issue(int $ticketId, ?DateTimeInterface $expiresAt = null, ?string $jti = null, array $extraClaims = []): string
@@ -127,6 +128,44 @@ class Ticket_token_lib
     }
 
     /**
+     * Phase 4: issue a scanner-device JWT. Carries `scanner` claim with
+     * device_id + jti (the row PK in ticket_scanner_devices, so revocation
+     * is a single UPDATE) + optional `locs` / `prods` scope arrays. The
+     * `tid` claim is set to 0 (the token is not bound to a single
+     * ticket — it grants permission to redeem MANY tickets at the gate).
+     *
+     * @param list<int> $locationIds
+     * @param list<int> $productIds
+     */
+    public function issueScanner(int $deviceId, string $jti, array $locationIds, array $productIds, DateTimeInterface $expiresAt): string
+    {
+        $this->assertDependency();
+
+        $key = $this->getActiveKey();
+        if ($key === null) {
+            throw new RuntimeException('No active ticket signing key. Run AddTickets migration or rotateKey() to seed one.');
+        }
+
+        $now     = new DateTimeImmutable();
+        $payload = [
+            'iss'     => $this->getIssuer(),
+            'aud'     => $this->getIssuer(),
+            'iat'     => $now->getTimestamp(),
+            'nbf'     => $now->getTimestamp(),
+            'exp'     => $expiresAt->getTimestamp(),
+            'jti'     => $jti,
+            'tid'     => 0,
+            'scanner' => [
+                'device_id' => $deviceId,
+                'locs'      => array_values(array_map('intval', $locationIds)),
+                'prods'     => array_values(array_map('intval', $productIds)),
+            ],
+        ];
+
+        return JWT::encode($payload, $key->private_key_pem, self::ALGORITHM, (string) $key->signing_key_id);
+    }
+
+    /**
      * Verify a token. Returns the decoded payload as an array on success, or
      * null on any failure (bad signature, wrong issuer, expired, missing key,
      * malformed, etc.).
@@ -140,7 +179,7 @@ class Ticket_token_lib
     {
         try {
             return $this->decodeOrFail($token);
-        } catch (\Throwable) {
+        } catch (Throwable) {
             return null;
         }
     }
@@ -162,7 +201,7 @@ class Ticket_token_lib
 
         $headerJson = JWT::urlsafeB64Decode($parts[0]);
         $header     = json_decode($headerJson, true);
-        if (!is_array($header) || !isset($header['kid'])) {
+        if (! is_array($header) || ! isset($header['kid'])) {
             throw new InvalidArgumentException('JWT header is missing kid.');
         }
 
@@ -230,9 +269,9 @@ class Ticket_token_lib
 
     private function assertDependency(): void
     {
-        if (!class_exists(JWT::class)) {
+        if (! class_exists(JWT::class)) {
             throw new RuntimeException(
-                'firebase/php-jwt is not installed. Run `composer install` to install QR ticketing dependencies.'
+                'firebase/php-jwt is not installed. Run `composer install` to install QR ticketing dependencies.',
             );
         }
     }

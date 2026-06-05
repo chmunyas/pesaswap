@@ -247,5 +247,18 @@ export const api = {
       request<ApiResponse<EntityPayload>>(`/public/tickets/${encodeURIComponent(code)}/transfer/request`, { method: 'POST', body: JSON.stringify(data) }),
     transferConfirm: (code: string, data: ApiData) =>
       request<ApiResponse<EntityPayload>>(`/public/tickets/${encodeURIComponent(code)}/transfer/confirm`, { method: 'POST', body: JSON.stringify(data) }),
+    scannerDevices: {
+      list: () => request<ApiResponse<EntityPayload>>('/tickets/scanner-devices'),
+      create: (data: ApiData) =>
+        request<ApiResponse<EntityPayload>>('/tickets/scanner-devices', { method: 'POST', body: JSON.stringify(data) }),
+      revoke: (id: number, data: ApiData) =>
+        request<ApiResponse<EntityPayload>>(`/tickets/scanner-devices/${id}/revoke`, { method: 'POST', body: JSON.stringify(data) }),
+    },
+    dashboard: (productId = 0, sessionId = 0) =>
+      request<ApiResponse<EntityPayload>>(`/tickets/dashboard?ticket_product_id=${productId}&session_id=${sessionId}`),
+    bulkIssue: (data: ApiData) =>
+      request<ApiResponse<EntityPayload>>('/tickets/bulk-issue', { method: 'POST', body: JSON.stringify(data) }),
+    resendDelivery: (id: number, data: ApiData) =>
+      request<ApiResponse<EntityPayload>>(`/tickets/${id}/resend-delivery`, { method: 'POST', body: JSON.stringify(data) }),
   },
 };

@@ -150,6 +150,13 @@ $routes->group('api', static function ($routes) {
     $routes->post('ticket-products/(:num)/translations', 'Api\TicketsController::translationUpsert/$1');
     $routes->delete('ticket-products/(:num)/translations/(:segment)', 'Api\TicketsController::translationDelete/$1/$2');
 
+    // Tickets — Phase 4: scanner devices + dashboard + bulk-issue
+    $routes->get('tickets/scanner-devices', 'Api\TicketsController::scannerDeviceIndex');
+    $routes->post('tickets/scanner-devices', 'Api\TicketsController::scannerDeviceCreate');
+    $routes->post('tickets/scanner-devices/(:num)/revoke', 'Api\TicketsController::scannerDeviceRevoke/$1');
+    $routes->get('tickets/dashboard', 'Api\TicketsController::ticketDashboard');
+    $routes->post('tickets/bulk-issue', 'Api\TicketsController::ticketBulkIssue');
+
     // PUBLIC endpoints — no auth required. Customer-safe data only.
     $routes->get('public/menu/(:segment)', 'Api\PublicController::menu/$1');
     $routes->get('public/giftcards/balance/(:segment)', 'Api\PublicController::giftcardBalance/$1');
