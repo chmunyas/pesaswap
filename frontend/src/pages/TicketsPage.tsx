@@ -12,6 +12,7 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  Calendar,
   CheckCircle2,
   ChevronRight,
   Film,
@@ -20,6 +21,7 @@ import {
   QrCode,
   ScanLine,
   Search,
+  Tag,
   Ticket,
   Trash2,
   Train,
@@ -148,6 +150,35 @@ function formatRelative(iso: string | null): string {
   }
 }
 
+interface TicketSession {
+  session_id: number;
+  ticket_product_id: number;
+  label: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  quantity: number | null;
+  quantity_issued: number;
+  remaining: number | null;
+  sold_out: boolean;
+  hall: string | null;
+  gate: string | null;
+  status: 'scheduled' | 'live' | 'ended' | 'cancelled';
+}
+
+interface TicketTier {
+  tier_id: number;
+  ticket_product_id: number;
+  name: string;
+  price: string;
+  quantity: number | null;
+  quantity_issued: number;
+  remaining: number | null;
+  sold_out: boolean;
+  sort_order: number;
+  color: string | null;
+  description: string | null;
+}
+
 interface CreateProductForm {
   item_id: string;
   subtype: Subtype;
@@ -269,6 +300,8 @@ function ProductsTab() {
   const [form, setForm] = useState<CreateProductForm>(EMPTY_CREATE);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<TicketProduct | null>(null);
+  const [managingSessions, setManagingSessions] = useState<TicketProduct | null>(null);
+  const [managingTiers, setManagingTiers] = useState<TicketProduct | null>(null);
 
   async function load() {
     setLoading(true);
@@ -459,8 +492,26 @@ function ProductsTab() {
                 <div className="mt-auto flex gap-2 pt-4">
                   <button
                     type="button"
+                    onClick={() => setManagingSessions(p)}
+                    title="Manage sessions"
+                    className="inline-flex items-center gap-1 rounded-lg border border-fuchsia-200 bg-white px-3 py-1.5 text-xs font-semibold text-fuchsia-700 hover:bg-fuchsia-50 dark:border-fuchsia-900 dark:bg-gray-900 dark:text-fuchsia-300"
+                  >
+                    <Calendar className="h-3.5 w-3.5" />
+                    Sessions
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setManagingTiers(p)}
+                    title="Manage tiers"
+                    className="inline-flex items-center gap-1 rounded-lg border border-fuchsia-200 bg-white px-3 py-1.5 text-xs font-semibold text-fuchsia-700 hover:bg-fuchsia-50 dark:border-fuchsia-900 dark:bg-gray-900 dark:text-fuchsia-300"
+                  >
+                    <Tag className="h-3.5 w-3.5" />
+                    Tiers
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setDeleting(p)}
-                    className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-gray-900 dark:text-rose-300"
+                    className="ml-auto rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-gray-900 dark:text-rose-300"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -639,7 +690,359 @@ function ProductsTab() {
           </div>
         )}
       </Modal>
+
+      {managingSessions && (
+        <SessionsModal product={managingSessions} onClose={() => setManagingSessions(null)} />
+      )}
+      {managingTiers && (
+        <TiersModal product={managingTiers} onClose={() => setManagingTiers(null)} />
+      )}
     </div>
+  );
+}
+
+// ---------- SESSIONS MODAL ----------
+
+function SessionsModal({ product, onClose }: { product: TicketProduct; onClose: () => void }) {
+  const [sessions, setSessions] = useState<TicketSession[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<TicketSession | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await api.tickets.products.sessions.list(product.ticket_product_id);
+      setSessions((res.data?.sessions as unknown as TicketSession[]) ?? []);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Load failed', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, []);
+
+  async function handleDelete(s: TicketSession) {
+    if (!window.confirm(`Delete session "${s.label ?? s.starts_at}"?`)) return;
+    try {
+      const res = await api.tickets.products.sessions.delete(product.ticket_product_id, s.session_id);
+      showToast(res.message || 'Deleted');
+      await load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Delete failed', 'error');
+    }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title={`Sessions — ${product.title}`} size="lg">
+      <div className="space-y-3">
+        <div className="flex justify-between">
+          <p className="text-xs text-gray-500">
+            Recurring or scheduled occurrences. Each session has its own capacity counter.
+          </p>
+          <button
+            type="button"
+            onClick={() => { setEditing(null); setShowCreate(true); }}
+            className="inline-flex items-center gap-1 rounded-lg bg-fuchsia-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-fuchsia-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New session
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex h-24 items-center justify-center"><div className="h-6 w-6 animate-spin rounded-full border-b-2 border-fuchsia-500" /></div>
+        ) : sessions.length === 0 ? (
+          <div className="rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40">
+            No sessions yet. Add one to schedule a showtime or occurrence.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+              <thead className="bg-gray-50 dark:bg-gray-900/40">
+                <tr>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Label</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Starts</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Ends</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Hall / Gate</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Capacity</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Status</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {sessions.map((s) => (
+                  <tr key={s.session_id}>
+                    <td className="px-3 py-2 text-xs">{s.label ?? '—'}</td>
+                    <td className="px-3 py-2 text-xs">{s.starts_at}</td>
+                    <td className="px-3 py-2 text-xs">{s.ends_at ?? '—'}</td>
+                    <td className="px-3 py-2 text-xs">{[s.hall, s.gate].filter(Boolean).join(' / ') || '—'}</td>
+                    <td className="px-3 py-2 text-xs">
+                      {s.quantity === null ? '∞' : `${s.quantity_issued} / ${s.quantity}`}
+                      {s.sold_out && <span className="ml-2 rounded bg-rose-100 px-1.5 text-[10px] font-bold text-rose-700">SOLD OUT</span>}
+                    </td>
+                    <td className="px-3 py-2 text-xs"><span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                      s.status === 'cancelled' ? 'bg-rose-100 text-rose-700' :
+                      s.status === 'ended' ? 'bg-gray-100 text-gray-600' :
+                      s.status === 'live' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+                    }`}>{s.status}</span></td>
+                    <td className="px-3 py-2 text-right">
+                      <button type="button" onClick={() => { setEditing(s); setShowCreate(true); }} className="text-[11px] font-semibold text-fuchsia-700 hover:underline">Edit</button>
+                      <button type="button" onClick={() => handleDelete(s)} className="ml-3 text-[11px] font-semibold text-rose-700 hover:underline">Del</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {showCreate && (
+          <SessionEditor
+            product={product}
+            session={editing}
+            onClose={() => { setShowCreate(false); setEditing(null); }}
+            onSaved={async () => { setShowCreate(false); setEditing(null); await load(); }}
+          />
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function SessionEditor({ product, session, onClose, onSaved }: { product: TicketProduct; session: TicketSession | null; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [label, setLabel] = useState(session?.label ?? '');
+  const [startsAt, setStartsAt] = useState(session?.starts_at ?? '');
+  const [endsAt, setEndsAt] = useState(session?.ends_at ?? '');
+  const [quantity, setQuantity] = useState(session?.quantity?.toString() ?? '');
+  const [hall, setHall] = useState(session?.hall ?? '');
+  const [gate, setGate] = useState(session?.gate ?? '');
+  const [status, setStatus] = useState<TicketSession['status']>(session?.status ?? 'scheduled');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!startsAt) { showToast('starts_at is required', 'error'); return; }
+    setSaving(true);
+    const payload = {
+      label: label || null,
+      starts_at: startsAt,
+      ends_at: endsAt || null,
+      quantity: quantity ? Number(quantity) : null,
+      hall: hall || null,
+      gate: gate || null,
+      status,
+    };
+    try {
+      if (session) {
+        await api.tickets.products.sessions.update(product.ticket_product_id, session.session_id, payload);
+        showToast('Session updated');
+      } else {
+        await api.tickets.products.sessions.create(product.ticket_product_id, payload);
+        showToast('Session created');
+      }
+      await onSaved();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title={session ? 'Edit session' : 'New session'} size="md">
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Day 1 Evening)" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        <div className="grid gap-2 md:grid-cols-2">
+          <label className="text-xs">
+            <span className="text-gray-500">Starts at *</span>
+            <input required type="datetime-local" value={startsAt.replace(' ', 'T').slice(0, 16)} onChange={(e) => setStartsAt(e.target.value.replace('T', ' ') + ':00')} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+          </label>
+          <label className="text-xs">
+            <span className="text-gray-500">Ends at</span>
+            <input type="datetime-local" value={endsAt ? endsAt.replace(' ', 'T').slice(0, 16) : ''} onChange={(e) => setEndsAt(e.target.value ? e.target.value.replace('T', ' ') + ':00' : '')} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+          </label>
+        </div>
+        <div className="grid gap-2 md:grid-cols-3">
+          <input value={hall} onChange={(e) => setHall(e.target.value)} placeholder="Hall / Stage" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+          <input value={gate} onChange={(e) => setGate(e.target.value)} placeholder="Gate / Entrance" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+          <input value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Capacity (blank = ∞)" type="number" min="0" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        </div>
+        <select value={status} onChange={(e) => setStatus(e.target.value as TicketSession['status'])} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+          <option value="scheduled">Scheduled</option>
+          <option value="live">Live</option>
+          <option value="ended">Ended</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm dark:border-gray-700 dark:text-gray-200">Cancel</button>
+          <button type="submit" disabled={saving} className="rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-700 disabled:opacity-60">{saving ? 'Saving…' : (session ? 'Update' : 'Create')}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// ---------- TIERS MODAL ----------
+
+function TiersModal({ product, onClose }: { product: TicketProduct; onClose: () => void }) {
+  const [tiers, setTiers] = useState<TicketTier[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<TicketTier | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await api.tickets.products.tiers.list(product.ticket_product_id);
+      setTiers((res.data?.tiers as unknown as TicketTier[]) ?? []);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Load failed', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, []);
+
+  async function handleDelete(t: TicketTier) {
+    if (!window.confirm(`Delete tier "${t.name}"?`)) return;
+    try {
+      const res = await api.tickets.products.tiers.delete(product.ticket_product_id, t.tier_id);
+      showToast(res.message || 'Deleted');
+      await load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Delete failed', 'error');
+    }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title={`Tiers — ${product.title}`} size="lg">
+      <div className="space-y-3">
+        <div className="flex justify-between">
+          <p className="text-xs text-gray-500">
+            Multiple SKUs per product (Adult, Child, VIP, Early Bird…). Each tier has its own price and capacity.
+          </p>
+          <button
+            type="button"
+            onClick={() => { setEditing(null); setShowCreate(true); }}
+            className="inline-flex items-center gap-1 rounded-lg bg-fuchsia-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-fuchsia-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New tier
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex h-24 items-center justify-center"><div className="h-6 w-6 animate-spin rounded-full border-b-2 border-fuchsia-500" /></div>
+        ) : tiers.length === 0 ? (
+          <div className="rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/40">
+            No tiers yet. Add one to differentiate Adult / Child / VIP pricing.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+              <thead className="bg-gray-50 dark:bg-gray-900/40">
+                <tr>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Name</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Price</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Capacity</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-mono uppercase text-gray-500">Sort</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {tiers.map((t) => (
+                  <tr key={t.tier_id}>
+                    <td className="px-3 py-2 text-xs">
+                      {t.color && <span className="mr-2 inline-block h-3 w-3 rounded-full align-middle" style={{ background: t.color || '#a855f7' }} />}
+                      <strong>{t.name}</strong>{t.description && <span className="ml-2 text-gray-500">{t.description}</span>}
+                    </td>
+                    <td className="px-3 py-2 text-xs font-mono">{t.price}</td>
+                    <td className="px-3 py-2 text-xs">
+                      {t.quantity === null ? '∞' : `${t.quantity_issued} / ${t.quantity}`}
+                      {t.sold_out && <span className="ml-2 rounded bg-rose-100 px-1.5 text-[10px] font-bold text-rose-700">SOLD OUT</span>}
+                    </td>
+                    <td className="px-3 py-2 text-xs">{t.sort_order}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button type="button" onClick={() => { setEditing(t); setShowCreate(true); }} className="text-[11px] font-semibold text-fuchsia-700 hover:underline">Edit</button>
+                      <button type="button" onClick={() => handleDelete(t)} className="ml-3 text-[11px] font-semibold text-rose-700 hover:underline">Del</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {showCreate && (
+          <TierEditor
+            product={product}
+            tier={editing}
+            onClose={() => { setShowCreate(false); setEditing(null); }}
+            onSaved={async () => { setShowCreate(false); setEditing(null); await load(); }}
+          />
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function TierEditor({ product, tier, onClose, onSaved }: { product: TicketProduct; tier: TicketTier | null; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [name, setName] = useState(tier?.name ?? '');
+  const [price, setPrice] = useState(tier?.price ?? '0.00');
+  const [quantity, setQuantity] = useState(tier?.quantity?.toString() ?? '');
+  const [sortOrder, setSortOrder] = useState(tier?.sort_order?.toString() ?? '0');
+  const [color, setColor] = useState(tier?.color ?? '');
+  const [description, setDescription] = useState(tier?.description ?? '');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) { showToast('name is required', 'error'); return; }
+    setSaving(true);
+    const payload = {
+      name,
+      price,
+      quantity: quantity ? Number(quantity) : null,
+      sort_order: Number(sortOrder) || 0,
+      color: color || null,
+      description: description || null,
+    };
+    try {
+      if (tier) {
+        await api.tickets.products.tiers.update(product.ticket_product_id, tier.tier_id, payload);
+        showToast('Tier updated');
+      } else {
+        await api.tickets.products.tiers.create(product.ticket_product_id, payload);
+        showToast('Tier created');
+      }
+      await onSaved();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal isOpen onClose={onClose} title={tier ? 'Edit tier' : 'New tier'} size="md">
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <div className="grid gap-2 md:grid-cols-2">
+          <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Adult, VIP)" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+          <input required value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price (e.g. 25.00)" inputMode="decimal" pattern="^\d+(\.\d{1,2})?$" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        </div>
+        <div className="grid gap-2 md:grid-cols-3">
+          <input value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Capacity (blank = ∞)" type="number" min="0" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+          <input value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} placeholder="Sort order" type="number" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+          <input value={color} onChange={(e) => setColor(e.target.value)} placeholder="Color (e.g. Color030)" maxLength={16} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        </div>
+        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" maxLength={255} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm dark:border-gray-700 dark:text-gray-200">Cancel</button>
+          <button type="submit" disabled={saving} className="rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-700 disabled:opacity-60">{saving ? 'Saving…' : (tier ? 'Update' : 'Create')}</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -656,8 +1059,33 @@ function InstancesTab() {
   const [issueReason, setIssueReason] = useState('comp');
   const [issueSeatRow, setIssueSeatRow] = useState('');
   const [issueSeatNumber, setIssueSeatNumber] = useState('');
+  const [issueSessions, setIssueSessions] = useState<TicketSession[]>([]);
+  const [issueTiers, setIssueTiers] = useState<TicketTier[]>([]);
+  const [issueSessionId, setIssueSessionId] = useState(0);
+  const [issueTierId, setIssueTierId] = useState(0);
   const [issuing, setIssuing] = useState(false);
   const [detail, setDetail] = useState<{ ticket: TicketInstance; redemptions: RedemptionLog[]; qrSvg?: string; qrUrl?: string } | null>(null);
+
+  // Phase 2: reload sessions/tiers whenever the issue product changes
+  useEffect(() => {
+    if (issueProductId <= 0) {
+      setIssueSessions([]); setIssueTiers([]); setIssueSessionId(0); setIssueTierId(0);
+      return;
+    }
+    void (async () => {
+      try {
+        const [sRes, tRes] = await Promise.all([
+          api.tickets.products.sessions.list(issueProductId),
+          api.tickets.products.tiers.list(issueProductId),
+        ]);
+        setIssueSessions((sRes.data?.sessions as unknown as TicketSession[]) ?? []);
+        setIssueTiers((tRes.data?.tiers as unknown as TicketTier[]) ?? []);
+        setIssueSessionId(0); setIssueTierId(0);
+      } catch {
+        setIssueSessions([]); setIssueTiers([]);
+      }
+    })();
+  }, [issueProductId]);
 
   async function loadAll() {
     setLoading(true);
@@ -682,6 +1110,8 @@ function InstancesTab() {
     setIssuing(true);
     try {
       const body: Record<string, unknown> = { ticket_product_id: issueProductId, issuance_reason: issueReason };
+      if (issueSessionId > 0) body.session_id = issueSessionId;
+      if (issueTierId > 0) body.tier_id = issueTierId;
       if (issueSeatRow && issueSeatNumber) {
         body.seat_assignment = { row: issueSeatRow, seat: issueSeatNumber };
       }
@@ -690,6 +1120,8 @@ function InstancesTab() {
       showToast(`Issued ${newTicket?.code ?? 'ticket'}`);
       setShowIssue(false);
       setIssueProductId(0);
+      setIssueSessionId(0);
+      setIssueTierId(0);
       setIssueSeatRow('');
       setIssueSeatNumber('');
       await loadAll();
@@ -844,6 +1276,38 @@ function InstancesTab() {
             <option value="test">Test</option>
             <option value="manual">Manual (other)</option>
           </select>
+          {issueSessions.length > 0 && (
+            <select
+              value={issueSessionId}
+              onChange={(e) => setIssueSessionId(Number(e.target.value))}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+            >
+              <option value={0}>— Session (optional) —</option>
+              {issueSessions.map((s) => (
+                <option key={s.session_id} value={s.session_id} disabled={s.sold_out || s.status === 'cancelled' || s.status === 'ended'}>
+                  {(s.label ? `${s.label} — ` : '') + s.starts_at}
+                  {s.quantity !== null ? ` (${s.quantity_issued}/${s.quantity})` : ''}
+                  {s.sold_out ? ' SOLD OUT' : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          {issueTiers.length > 0 && (
+            <select
+              value={issueTierId}
+              onChange={(e) => setIssueTierId(Number(e.target.value))}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+            >
+              <option value={0}>— Tier (optional) —</option>
+              {issueTiers.map((t) => (
+                <option key={t.tier_id} value={t.tier_id} disabled={t.sold_out}>
+                  {t.name} — {t.price}
+                  {t.quantity !== null ? ` (${t.quantity_issued}/${t.quantity})` : ''}
+                  {t.sold_out ? ' SOLD OUT' : ''}
+                </option>
+              ))}
+            </select>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <input
               placeholder="Seat row (optional)"
