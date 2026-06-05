@@ -45,7 +45,7 @@ $routes->add('reports/specific_suppliers', 'Reports::specific_supplier_input');
 $routes->get('t/(:any)', 'Ticket_public::show/$1');
 
 // API Routes
-$routes->group('api', function($routes) {
+$routes->group('api', static function ($routes) {
     $routes->post('auth/login', 'Api\AuthController::login');
     $routes->post('auth/logout', 'Api\AuthController::logout');
     $routes->get('auth/me', 'Api\AuthController::me');
@@ -96,6 +96,10 @@ $routes->group('api', function($routes) {
     $routes->delete('expenses/(:num)', 'Api\ExpensesController::delete/$1');
 
     $routes->get('cashups', 'Api\CashupsController::index');
+    $routes->get('cashups/(:num)', 'Api\CashupsController::show/$1');
+    $routes->post('cashups', 'Api\CashupsController::open');
+    $routes->post('cashups/(:num)/close', 'Api\CashupsController::close/$1');
+    $routes->delete('cashups/(:num)', 'Api\CashupsController::delete/$1');
 
     $routes->get('config', 'Api\ConfigController::index');
     $routes->post('config', 'Api\ConfigController::save');
@@ -152,6 +156,8 @@ $routes->group('api', function($routes) {
     $routes->options('public/giftcards/balance/(:segment)', 'Api\PublicController::preflight');
     $routes->options('expenses', 'Api\ExpensesController::preflight');
     $routes->options('cashups', 'Api\CashupsController::preflight');
+    $routes->options('cashups/(:num)', 'Api\CashupsController::preflight');
+    $routes->options('cashups/(:num)/close', 'Api\CashupsController::preflight');
     $routes->options('reports/summary', 'Api\ReportsController::preflight');
     $routes->options('item-kits', 'Api\ItemKitsController::preflight');
     $routes->options('item-kits/(:num)', 'Api\ItemKitsController::preflight');

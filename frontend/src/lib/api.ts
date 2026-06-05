@@ -145,7 +145,19 @@ export const api = {
   },
   expenses: expenseEndpoints,
   cashups: {
-    list: () => request<ApiResponse<{ cashups?: EntityList }>>('/cashups'),
+    list: () => request<ApiResponse<{ cashups?: EntityList; open?: Record<string, unknown> | null }>>('/cashups'),
+    get: (id: number) => request<ApiResponse<{ cashup?: Record<string, unknown> }>>(`/cashups/${id}`),
+    open: (data: ApiData) =>
+      request<ApiResponse<{ cashup?: Record<string, unknown> }>>('/cashups', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    close: (id: number, data: ApiData) =>
+      request<ApiResponse<{ cashup?: Record<string, unknown> }>>(`/cashups/${id}/close`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: number) => request<ApiResponse>(`/cashups/${id}`, { method: 'DELETE' }),
   },
   office: {
     settings: () => request<ApiResponse>('/office/settings'),
@@ -186,6 +198,30 @@ export const api = {
         request<ApiResponse<EntityPayload>>(`/ticket-products/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
       delete: (id: number) =>
         request<ApiResponse<EntityPayload>>(`/ticket-products/${id}`, { method: 'DELETE' }),
+      sessions: {
+        list: (productId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/sessions`),
+        get: (productId: number, sessionId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/sessions/${sessionId}`),
+        create: (productId: number, data: ApiData) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/sessions`, { method: 'POST', body: JSON.stringify(data) }),
+        update: (productId: number, sessionId: number, data: ApiData) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/sessions/${sessionId}`, { method: 'PUT', body: JSON.stringify(data) }),
+        delete: (productId: number, sessionId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/sessions/${sessionId}`, { method: 'DELETE' }),
+      },
+      tiers: {
+        list: (productId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/tiers`),
+        get: (productId: number, tierId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/tiers/${tierId}`),
+        create: (productId: number, data: ApiData) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/tiers`, { method: 'POST', body: JSON.stringify(data) }),
+        update: (productId: number, tierId: number, data: ApiData) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/tiers/${tierId}`, { method: 'PUT', body: JSON.stringify(data) }),
+        delete: (productId: number, tierId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/tiers/${tierId}`, { method: 'DELETE' }),
+      },
     },
     list: (page = 1, limit = 50, productId = 0, status = '', customerId = 0) =>
       request<ApiResponse<EntityPayload>>(
@@ -201,9 +237,15 @@ export const api = {
       request<ApiResponse<EntityPayload>>(`/tickets/${id}/revoke`, { method: 'POST', body: JSON.stringify(data) }),
     refund: (id: number, data: ApiData) =>
       request<ApiResponse<EntityPayload>>(`/tickets/${id}/refund`, { method: 'POST', body: JSON.stringify(data) }),
+    assign: (id: number, data: ApiData) =>
+      request<ApiResponse<EntityPayload>>(`/tickets/${id}/assign`, { method: 'PUT', body: JSON.stringify(data) }),
     qr: (id: number) =>
       request<ApiResponse<EntityPayload>>(`/tickets/${id}/qr`),
     publicLookup: (code: string) =>
       request<ApiResponse<EntityPayload>>(`/public/tickets/${encodeURIComponent(code)}`),
+    transferRequest: (code: string, data: ApiData) =>
+      request<ApiResponse<EntityPayload>>(`/public/tickets/${encodeURIComponent(code)}/transfer/request`, { method: 'POST', body: JSON.stringify(data) }),
+    transferConfirm: (code: string, data: ApiData) =>
+      request<ApiResponse<EntityPayload>>(`/public/tickets/${encodeURIComponent(code)}/transfer/confirm`, { method: 'POST', body: JSON.stringify(data) }),
   },
 };
