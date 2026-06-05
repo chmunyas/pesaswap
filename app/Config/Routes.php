@@ -63,6 +63,7 @@ $routes->group('api', static function ($routes) {
 
     $routes->get('sales', 'Api\SalesController::index');
     $routes->get('sales/(:num)', 'Api\SalesController::show/$1');
+    $routes->post('sales', 'Api\SalesController::create');
 
     $routes->get('customers', 'Api\CustomersController::index');
     $routes->get('customers/(:num)', 'Api\CustomersController::show/$1');

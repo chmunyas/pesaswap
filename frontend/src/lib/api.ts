@@ -131,6 +131,8 @@ export const api = {
     list: (page = 1, limit = 20) =>
       request<ApiResponse<{ sales?: EntityList }>>(`/sales?page=${page}&limit=${limit}`),
     get: (id: number) => request<ApiResponse>(`/sales/${id}`),
+    create: (data: ApiData) =>
+      request<ApiResponse<EntityPayload>>('/sales', { method: 'POST', body: JSON.stringify(data) }),
   },
   reports: {
     list: () => request<ApiResponse<{ stats?: EntityList }>>('/reports'),
