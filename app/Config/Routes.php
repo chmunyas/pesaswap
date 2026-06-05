@@ -129,12 +129,36 @@ $routes->group('api', static function ($routes) {
     $routes->post('tickets/redeem', 'Api\TicketsController::ticketRedeem');
     $routes->post('tickets/(:num)/revoke', 'Api\TicketsController::ticketRevoke/$1');
     $routes->post('tickets/(:num)/refund', 'Api\TicketsController::ticketRefund/$1');
+    $routes->put('tickets/(:num)/assign', 'Api\TicketsController::ticketAssign/$1');
+    $routes->post('tickets/(:num)/resend-delivery', 'Api\TicketsController::ticketResendDelivery/$1');
     $routes->get('tickets/(:num)/qr', 'Api\TicketsController::ticketQr/$1');
+
+    // Tickets — Phase 2: sessions + tiers per product
+    $routes->get('ticket-products/(:num)/sessions', 'Api\TicketsController::sessionIndex/$1');
+    $routes->get('ticket-products/(:num)/sessions/(:num)', 'Api\TicketsController::sessionShow/$1/$2');
+    $routes->post('ticket-products/(:num)/sessions', 'Api\TicketsController::sessionCreate/$1');
+    $routes->put('ticket-products/(:num)/sessions/(:num)', 'Api\TicketsController::sessionUpdate/$1/$2');
+    $routes->delete('ticket-products/(:num)/sessions/(:num)', 'Api\TicketsController::sessionDelete/$1/$2');
+    $routes->get('ticket-products/(:num)/tiers', 'Api\TicketsController::tierIndex/$1');
+    $routes->get('ticket-products/(:num)/tiers/(:num)', 'Api\TicketsController::tierShow/$1/$2');
+    $routes->post('ticket-products/(:num)/tiers', 'Api\TicketsController::tierCreate/$1');
+    $routes->put('ticket-products/(:num)/tiers/(:num)', 'Api\TicketsController::tierUpdate/$1/$2');
+    $routes->delete('ticket-products/(:num)/tiers/(:num)', 'Api\TicketsController::tierDelete/$1/$2');
+
+    // Tickets — Phase 3: translations
+    $routes->get('ticket-products/(:num)/translations', 'Api\TicketsController::translationIndex/$1');
+    $routes->post('ticket-products/(:num)/translations', 'Api\TicketsController::translationUpsert/$1');
+    $routes->delete('ticket-products/(:num)/translations/(:segment)', 'Api\TicketsController::translationDelete/$1/$2');
 
     // PUBLIC endpoints — no auth required. Customer-safe data only.
     $routes->get('public/menu/(:segment)', 'Api\PublicController::menu/$1');
     $routes->get('public/giftcards/balance/(:segment)', 'Api\PublicController::giftcardBalance/$1');
     $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
+    $routes->post('public/tickets/(:segment)/transfer/request', 'Api\PublicController::ticketTransferRequest/$1');
+    $routes->post('public/tickets/(:segment)/transfer/confirm', 'Api\PublicController::ticketTransferConfirm/$1');
+    $routes->get('public/tickets/(:segment)/ics', 'Api\PublicController::ticketIcs/$1');
+    $routes->get('public/tickets/(:segment)/google-wallet', 'Api\PublicController::ticketGoogleWallet/$1');
+    $routes->get('public/tickets/(:segment)/apple-wallet', 'Api\PublicController::ticketAppleWallet/$1');
 
     $routes->options('auth/login', 'Api\AuthController::preflight');
     $routes->options('auth/logout', 'Api\AuthController::preflight');
@@ -166,9 +190,13 @@ $routes->group('api', static function ($routes) {
     $routes->options('public/menu/(:segment)', 'Api\PublicController::preflight');
     $routes->options('ticket-products', 'Api\TicketsController::preflight');
     $routes->options('ticket-products/(:num)', 'Api\TicketsController::preflight');
+    $routes->options('ticket-products/(:num)/(:any)', 'Api\TicketsController::preflight');
+    $routes->options('ticket-products/(:num)/(:any)/(:any)', 'Api\TicketsController::preflight');
     $routes->options('tickets', 'Api\TicketsController::preflight');
     $routes->options('tickets/(:num)', 'Api\TicketsController::preflight');
     $routes->options('tickets/(:num)/(:any)', 'Api\TicketsController::preflight');
     $routes->options('tickets/redeem', 'Api\TicketsController::preflight');
     $routes->options('public/tickets/(:segment)', 'Api\PublicController::preflight');
+    $routes->options('public/tickets/(:segment)/(:any)', 'Api\PublicController::preflight');
+    $routes->options('public/tickets/(:segment)/(:any)/(:any)', 'Api\PublicController::preflight');
 });

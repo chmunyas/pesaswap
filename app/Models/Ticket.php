@@ -44,6 +44,8 @@ class Ticket extends Model
     protected $useSoftDeletes   = false;
     protected $allowedFields    = [
         'ticket_product_id',
+        'session_id',
+        'tier_id',
         'sale_id',
         'sale_item_seq',
         'code',
@@ -85,6 +87,8 @@ class Ticket extends Model
 
         $row = [
             'ticket_product_id'    => (int) $params['ticket_product_id'],
+            'session_id'           => isset($params['session_id']) && $params['session_id'] !== null ? (int) $params['session_id'] : null,
+            'tier_id'              => isset($params['tier_id']) && $params['tier_id'] !== null ? (int) $params['tier_id'] : null,
             'sale_id'              => $params['sale_id'] ?? null,
             'sale_item_seq'        => $params['sale_item_seq'] ?? null,
             'code'                 => $code,
@@ -100,12 +104,10 @@ class Ticket extends Model
         $this->db->table('tickets')->insert($row);
         $ticketId = (int) $this->db->insertID();
 
-        // Bump the ticket_products.quantity_issued counter.
-        $this->db->query(
-            'UPDATE ' . $this->db->prefixTable('ticket_products')
-            . ' SET quantity_issued = quantity_issued + 1 WHERE ticket_product_id = ?',
-            [(int) $params['ticket_product_id']],
-        );
+        // Phase 2: counter ownership moved entirely to callers (controller
+        // for manual issuance, Ticket_issuer for sale-driven issuance) so
+        // they can apply atomic conditional UPDATEs across product +
+        // session + tier counters within a single transaction.
 
         $tokenLib = service('ticket_token_lib');
         $expAt    = isset($params['valid_to']) ? DateTimeImmutable::createFromInterface($params['valid_to']) : null;

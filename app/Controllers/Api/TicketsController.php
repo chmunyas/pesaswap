@@ -56,6 +56,13 @@ class TicketsController extends BaseApiController
         'expired'  => [],
     ];
 
+    // ========================================================================
+    // Phase 2 — sessions, tiers, assign, transfer
+    // ========================================================================
+
+    private const ALLOWED_SESSION_STATUSES  = ['scheduled', 'live', 'ended', 'cancelled'];
+    private const ALLOWED_TRANSFER_CHANNELS = ['email', 'sms'];
+
     private Ticket_product $products;
     private Ticket $tickets;
 
@@ -411,9 +418,18 @@ class TicketsController extends BaseApiController
         }
 
         $customerId = isset($body['customer_id']) ? (int) $body['customer_id'] : null;
+        $sessionId  = isset($body['session_id']) && $body['session_id'] !== null && $body['session_id'] !== ''
+            ? (int) $body['session_id'] : null;
+        $tierId = isset($body['tier_id']) && $body['tier_id'] !== null && $body['tier_id'] !== ''
+            ? (int) $body['tier_id'] : null;
 
         try {
-            $this->db->transStart();
+            // Manual transactions — CI4's transStart/transComplete only rolls
+            // back on driver errors; logical aborts via affectedRows()==0 need
+            // explicit transRollback() to avoid committing partial counter
+            // increments. See Phase 2 commit for the exhaustion test that
+            // motivated this change.
+            $this->db->transBegin();
 
             $productsTable = $this->db->prefixTable('ticket_products');
             $product       = $this->db->query(
@@ -421,46 +437,88 @@ class TicketsController extends BaseApiController
                 [$productId],
             )->getRowArray();
             if ($product === null) {
-                $this->db->transComplete();
+                $this->db->transRollback();
 
                 return $this->respondError('Ticket product not found or archived.', 404);
             }
 
             $err = $this->validateIssuance($product, $customerId, $body['seat_assignment'] ?? null);
             if (is_string($err)) {
-                $this->db->transComplete();
+                $this->db->transRollback();
 
                 return $this->respondError($err, 422);
             }
 
-            // Conditional counter update — atomic protection against overshooting cap
-            $quantity = $product['quantity'] === null ? null : (int) $product['quantity'];
-            if ($quantity !== null) {
-                $affected = $this->db->query(
-                    "UPDATE {$productsTable}
-                     SET quantity_issued = quantity_issued + 1
-                     WHERE ticket_product_id = ?
-                       AND deleted = 0
-                       AND (quantity IS NULL OR quantity_issued < quantity)",
-                    [$productId],
-                );
-                if ($this->db->affectedRows() === 0) {
-                    $this->db->transComplete();
+            // Conditional product counter UPDATE — atomic cap protection.
+            $this->db->query(
+                "UPDATE {$productsTable}
+                 SET quantity_issued = quantity_issued + 1
+                 WHERE ticket_product_id = ?
+                   AND deleted = 0
+                   AND (quantity IS NULL OR quantity_issued < quantity)",
+                [$productId],
+            );
+            if ($this->db->affectedRows() === 0) {
+                $this->db->transRollback();
 
-                    return $this->respondError('Ticket product is sold out.', 409);
-                }
-            } else {
-                // Unbounded — still bump the counter inside the transaction.
-                $this->db->query(
-                    "UPDATE {$productsTable} SET quantity_issued = quantity_issued + 1 WHERE ticket_product_id = ? AND deleted = 0",
-                    [$productId],
-                );
+                return $this->respondError('Ticket product is sold out.', 409);
             }
 
-            [$validFrom, $validTo] = $this->resolveValidityWindow($product, $body);
+            // Phase 2: session counter (optional)
+            if ($sessionId !== null) {
+                if (! $this->db->tableExists('ticket_product_sessions')) {
+                    $this->db->transRollback();
+
+                    return $this->respondError('Sessions migration not applied.', 503);
+                }
+                $sessionsTable = $this->db->prefixTable('ticket_product_sessions');
+                $this->db->query(
+                    "UPDATE {$sessionsTable}
+                     SET quantity_issued = quantity_issued + 1
+                     WHERE session_id = ?
+                       AND ticket_product_id = ?
+                       AND deleted = 0
+                       AND status IN ('scheduled','live')
+                       AND (quantity IS NULL OR quantity_issued < quantity)",
+                    [$sessionId, $productId],
+                );
+                if ($this->db->affectedRows() === 0) {
+                    $this->db->transRollback();
+
+                    return $this->respondError('Session is sold out, cancelled, or not for this product.', 409);
+                }
+            }
+
+            // Phase 2: tier counter (optional)
+            if ($tierId !== null) {
+                if (! $this->db->tableExists('ticket_product_tiers')) {
+                    $this->db->transRollback();
+
+                    return $this->respondError('Tiers migration not applied.', 503);
+                }
+                $tiersTable = $this->db->prefixTable('ticket_product_tiers');
+                $this->db->query(
+                    "UPDATE {$tiersTable}
+                     SET quantity_issued = quantity_issued + 1
+                     WHERE tier_id = ?
+                       AND ticket_product_id = ?
+                       AND deleted = 0
+                       AND (quantity IS NULL OR quantity_issued < quantity)",
+                    [$tierId, $productId],
+                );
+                if ($this->db->affectedRows() === 0) {
+                    $this->db->transRollback();
+
+                    return $this->respondError('Tier is sold out or not for this product.', 409);
+                }
+            }
+
+            [$validFrom, $validTo] = $this->resolveValidityWindow($product, $body, $sessionId);
 
             $params = [
                 'ticket_product_id' => $productId,
+                'session_id'        => $sessionId,
+                'tier_id'           => $tierId,
                 'sale_id'           => $saleId,
                 'sale_item_seq'     => isset($body['sale_item_seq']) ? (int) $body['sale_item_seq'] : null,
                 'customer_id'       => $customerId,
@@ -469,15 +527,9 @@ class TicketsController extends BaseApiController
                 'seat_assignment'   => $body['seat_assignment'] ?? null,
             ];
 
-            // Phase 0 Ticket::issue handles code + JWT + code_hash + insert.
-            // BUT it also bumps quantity_issued. To avoid double-counting we
-            // pre-incremented above; compensate by decrementing before the
-            // model call so the net effect is +1.
-            $this->db->query(
-                "UPDATE {$productsTable} SET quantity_issued = quantity_issued - 1 WHERE ticket_product_id = ?",
-                [$productId],
-            );
-
+            // Phase 2: Ticket::issue no longer auto-bumps the counter — we own
+            // it above. This eliminates the previous increment-then-decrement
+            // dance that was fragile under transaction rollback.
             $result = $this->tickets->issue($params);
             if (! isset($result['ticket']) || ! isset($result['token'])) {
                 $this->db->transRollback();
@@ -499,9 +551,23 @@ class TicketsController extends BaseApiController
                     ->update(['transfer_history_json' => json_encode($audit)]);
             }
 
-            $this->db->transComplete();
-            if (! $this->db->transStatus()) {
+            if (! $this->db->transCommit()) {
                 return $this->respondError('Issuance transaction failed.', 500);
+            }
+
+            // Phase 3: best-effort auto-delivery if operator supplied a recipient.
+            $deliveryEmail = isset($body['deliver_email']) ? trim((string) $body['deliver_email']) : '';
+            $deliveryPhone = isset($body['deliver_phone']) ? trim((string) $body['deliver_phone']) : '';
+            if (($deliveryEmail !== '' || $deliveryPhone !== '') && $this->db->tableExists('ticket_delivery_attempts')) {
+                try {
+                    service('ticket_delivery_lib')->dispatch(
+                        $result['ticket'],
+                        $deliveryEmail !== '' ? $deliveryEmail : null,
+                        $deliveryPhone !== '' ? $deliveryPhone : null,
+                    );
+                } catch (Throwable $e) {
+                    log_message('error', 'TicketsController::ticketIssue delivery — ' . $e->getMessage());
+                }
             }
 
             $fresh = $this->loadTicketRow((int) $result['ticket']->ticket_id);
@@ -512,6 +578,10 @@ class TicketsController extends BaseApiController
                 'redemption_url' => service('qr_lib')->build_redemption_url((string) $result['token']),
             ], 'Ticket issued.', 201);
         } catch (Throwable $e) {
+            try {
+                $this->db->transRollback();
+            } catch (Throwable $ignore) {
+            }
             log_message('error', 'TicketsController::ticketIssue — ' . $e->getMessage());
 
             return $this->respondError('Failed to issue ticket: ' . $e->getMessage(), 500);
@@ -1022,8 +1092,24 @@ class TicketsController extends BaseApiController
         return true;
     }
 
-    private function resolveValidityWindow(array $product, array $body): array
+    private function resolveValidityWindow(array $product, array $body, ?int $sessionId = null): array
     {
+        // Phase 2: if a session is selected, its window wins.
+        if ($sessionId !== null && $this->db->tableExists('ticket_product_sessions')) {
+            $session = $this->db->table('ticket_product_sessions')
+                ->where('session_id', $sessionId)
+                ->where('ticket_product_id', (int) $product['ticket_product_id'])
+                ->where('deleted', 0)
+                ->get()
+                ->getRowArray();
+            if ($session !== null && ! empty($session['starts_at'])) {
+                $vf = new DateTimeImmutable((string) $session['starts_at']);
+                $vt = ! empty($session['ends_at']) ? new DateTimeImmutable((string) $session['ends_at']) : null;
+
+                return [$vf, $vt];
+            }
+        }
+
         $mode = (string) ($product['validity_mode'] ?? 'fixed');
         if ($mode === 'fixed') {
             $vf = $product['begin_ts'] ? new DateTimeImmutable((string) $product['begin_ts']) : null;
@@ -1207,5 +1293,1089 @@ class TicketsController extends BaseApiController
     private function likeValue(string $value): string
     {
         return '%' . $this->db->escapeLikeString($value) . '%';
+    }
+
+    private function phase2MigrationApplied(): bool
+    {
+        return $this->migrationApplied()
+            && $this->db->tableExists('ticket_product_sessions')
+            && $this->db->tableExists('ticket_product_tiers')
+            && $this->db->tableExists('ticket_transfers');
+    }
+
+    private function phase3MigrationApplied(): bool
+    {
+        return $this->phase2MigrationApplied()
+            && $this->db->tableExists('ticket_delivery_attempts')
+            && $this->db->tableExists('ticket_product_translations');
+    }
+
+    // ---------- sessions CRUD ----------
+
+    public function sessionIndex(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets sessions migration is required.', 503);
+        }
+        if ($this->loadProductRow($productId) === null) {
+            return $this->respondError('Ticket product not found.', 404);
+        }
+
+        try {
+            $rows = $this->db->table('ticket_product_sessions')
+                ->where('ticket_product_id', $productId)
+                ->where('deleted', 0)
+                ->orderBy('starts_at', 'ASC')
+                ->get()
+                ->getResultArray();
+            $sessions = array_map(fn (array $r) => $this->decorateSession($r), $rows);
+
+            return $this->respondSuccess(['sessions' => $sessions]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::sessionIndex — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load sessions.', 500);
+        }
+    }
+
+    public function sessionShow(int $productId, int $sessionId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets sessions migration is required.', 503);
+        }
+        $session = $this->loadSessionRow($productId, $sessionId);
+        if ($session === null) {
+            return $this->respondError('Session not found.', 404);
+        }
+
+        return $this->respondSuccess(['session' => $this->decorateSession($session)]);
+    }
+
+    public function sessionCreate(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets sessions migration is required.', 503);
+        }
+        if ($this->loadProductRow($productId) === null) {
+            return $this->respondError('Ticket product not found.', 404);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $err  = $this->validateSessionPayload($body, true);
+        if (is_string($err)) {
+            return $this->respondError($err, 422);
+        }
+
+        try {
+            $row = $this->buildSessionRow($body, $productId);
+            $this->db->table('ticket_product_sessions')->insert($row);
+            $newId = (int) $this->db->insertID();
+            $fresh = $this->loadSessionRow($productId, $newId);
+
+            return $this->respondSuccess(['session' => $fresh ? $this->decorateSession($fresh) : null], 'Session created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::sessionCreate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to create session.', 500);
+        }
+    }
+
+    public function sessionUpdate(int $productId, int $sessionId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets sessions migration is required.', 503);
+        }
+        if ($this->loadSessionRow($productId, $sessionId) === null) {
+            return $this->respondError('Session not found.', 404);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $err  = $this->validateSessionPayload($body, false);
+        if (is_string($err)) {
+            return $this->respondError($err, 422);
+        }
+
+        try {
+            $patch = $this->buildSessionRow($body, $productId);
+            unset($patch['quantity_issued'], $patch['ticket_product_id']);
+            $this->db->table('ticket_product_sessions')->where('session_id', $sessionId)->update($patch);
+            $fresh = $this->loadSessionRow($productId, $sessionId);
+
+            return $this->respondSuccess(['session' => $fresh ? $this->decorateSession($fresh) : null], 'Session updated.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::sessionUpdate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to update session.', 500);
+        }
+    }
+
+    public function sessionDelete(int $productId, int $sessionId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets sessions migration is required.', 503);
+        }
+        $existing = $this->loadSessionRow($productId, $sessionId);
+        if ($existing === null) {
+            return $this->respondError('Session not found.', 404);
+        }
+
+        try {
+            $issued = (int) $existing['quantity_issued'];
+            $this->db->table('ticket_product_sessions')->where('session_id', $sessionId)->update(['deleted' => 1]);
+            $msg = $issued > 0
+                ? "Session archived (still readable for {$issued} issued tickets)."
+                : 'Session deleted.';
+
+            return $this->respondSuccess(['session_id' => $sessionId, 'quantity_issued' => $issued], $msg);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::sessionDelete — ' . $e->getMessage());
+
+            return $this->respondError('Failed to delete session.', 500);
+        }
+    }
+
+    // ---------- tiers CRUD ----------
+
+    public function tierIndex(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets tiers migration is required.', 503);
+        }
+        if ($this->loadProductRow($productId) === null) {
+            return $this->respondError('Ticket product not found.', 404);
+        }
+
+        try {
+            $rows = $this->db->table('ticket_product_tiers')
+                ->where('ticket_product_id', $productId)
+                ->where('deleted', 0)
+                ->orderBy('sort_order', 'ASC')
+                ->orderBy('tier_id', 'ASC')
+                ->get()
+                ->getResultArray();
+            $tiers = array_map(fn (array $r) => $this->decorateTier($r), $rows);
+
+            return $this->respondSuccess(['tiers' => $tiers]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::tierIndex — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load tiers.', 500);
+        }
+    }
+
+    public function tierShow(int $productId, int $tierId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets tiers migration is required.', 503);
+        }
+        $tier = $this->loadTierRow($productId, $tierId);
+        if ($tier === null) {
+            return $this->respondError('Tier not found.', 404);
+        }
+
+        return $this->respondSuccess(['tier' => $this->decorateTier($tier)]);
+    }
+
+    public function tierCreate(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets tiers migration is required.', 503);
+        }
+        if ($this->loadProductRow($productId) === null) {
+            return $this->respondError('Ticket product not found.', 404);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $err  = $this->validateTierPayload($body, true);
+        if (is_string($err)) {
+            return $this->respondError($err, 422);
+        }
+
+        try {
+            $row = $this->buildTierRow($body, $productId);
+            $this->db->table('ticket_product_tiers')->insert($row);
+            $newId = (int) $this->db->insertID();
+            $fresh = $this->loadTierRow($productId, $newId);
+
+            return $this->respondSuccess(['tier' => $fresh ? $this->decorateTier($fresh) : null], 'Tier created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::tierCreate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to create tier.', 500);
+        }
+    }
+
+    public function tierUpdate(int $productId, int $tierId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets tiers migration is required.', 503);
+        }
+        if ($this->loadTierRow($productId, $tierId) === null) {
+            return $this->respondError('Tier not found.', 404);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $err  = $this->validateTierPayload($body, false);
+        if (is_string($err)) {
+            return $this->respondError($err, 422);
+        }
+
+        try {
+            $patch = $this->buildTierRow($body, $productId);
+            unset($patch['quantity_issued'], $patch['ticket_product_id']);
+            $this->db->table('ticket_product_tiers')->where('tier_id', $tierId)->update($patch);
+            $fresh = $this->loadTierRow($productId, $tierId);
+
+            return $this->respondSuccess(['tier' => $fresh ? $this->decorateTier($fresh) : null], 'Tier updated.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::tierUpdate — ' . $e->getMessage());
+
+            return $this->respondError('Failed to update tier.', 500);
+        }
+    }
+
+    public function tierDelete(int $productId, int $tierId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets tiers migration is required.', 503);
+        }
+        $existing = $this->loadTierRow($productId, $tierId);
+        if ($existing === null) {
+            return $this->respondError('Tier not found.', 404);
+        }
+
+        try {
+            $issued = (int) $existing['quantity_issued'];
+            $this->db->table('ticket_product_tiers')->where('tier_id', $tierId)->update(['deleted' => 1]);
+            $msg = $issued > 0
+                ? "Tier archived (still referenced by {$issued} issued tickets)."
+                : 'Tier deleted.';
+
+            return $this->respondSuccess(['tier_id' => $tierId, 'quantity_issued' => $issued], $msg);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::tierDelete — ' . $e->getMessage());
+
+            return $this->respondError('Failed to delete tier.', 500);
+        }
+    }
+
+    // ---------- assign ----------
+
+    public function ticketAssign(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+        if ($this->loadTicketRow($id) === null) {
+            return $this->respondError('Ticket not found.', 404);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        if (empty($body) || ! is_array($body)) {
+            return $this->respondError('Assignment payload is empty.', 422);
+        }
+
+        $allowed = ['seat', 'row', 'zone', 'entrance', 'gate', 'hall', 'showtime', 'flight_no', 'pnr', 'session_id', 'tier_id', 'notes'];
+        $patch   = [];
+
+        foreach ($allowed as $k) {
+            if (array_key_exists($k, $body)) {
+                $patch[$k] = $body[$k];
+            }
+        }
+        if ($patch === []) {
+            return $this->respondError('No assignable fields supplied. Allowed: ' . implode(', ', $allowed), 422);
+        }
+
+        try {
+            $this->db->transBegin();
+
+            $ticketsTable = $this->db->prefixTable('tickets');
+            $current      = $this->db->query(
+                "SELECT seat_assignment_json, ticket_product_id, session_id, tier_id FROM {$ticketsTable} WHERE ticket_id = ? FOR UPDATE",
+                [$id],
+            )->getRowArray();
+            $existing = $current['seat_assignment_json'] ? (array) json_decode((string) $current['seat_assignment_json'], true) : [];
+
+            $sessionUpdate = null;
+            $tierUpdate    = null;
+            if (array_key_exists('session_id', $patch)) {
+                $sid = $patch['session_id'] === null ? null : (int) $patch['session_id'];
+                if ($sid !== null && $this->loadSessionRow((int) $current['ticket_product_id'], $sid) === null) {
+                    $this->db->transRollback();
+
+                    return $this->respondError('Session not found for this product.', 422);
+                }
+                $sessionUpdate = $sid;
+                unset($patch['session_id']);
+            }
+            if (array_key_exists('tier_id', $patch)) {
+                $tid = $patch['tier_id'] === null ? null : (int) $patch['tier_id'];
+                if ($tid !== null && $this->loadTierRow((int) $current['ticket_product_id'], $tid) === null) {
+                    $this->db->transRollback();
+
+                    return $this->respondError('Tier not found for this product.', 422);
+                }
+                $tierUpdate = $tid;
+                unset($patch['tier_id']);
+            }
+
+            foreach ($patch as $k => $v) {
+                if ($v === null) {
+                    unset($existing[$k]);
+                } else {
+                    $existing[$k] = $v;
+                }
+            }
+
+            $update = ['seat_assignment_json' => json_encode($existing)];
+            if ($sessionUpdate !== null || array_key_exists('session_id', $body)) {
+                $update['session_id'] = $sessionUpdate;
+            }
+            if ($tierUpdate !== null || array_key_exists('tier_id', $body)) {
+                $update['tier_id'] = $tierUpdate;
+            }
+
+            $this->db->table('tickets')->where('ticket_id', $id)->update($update);
+
+            // Audit. ticket_redemptions.result enum doesn't include 'assigned'
+            // so we use 'ok' + a typed note prefix.
+            $this->db->table('ticket_redemptions')->insert([
+                'ticket_id'   => $id,
+                'employee_id' => $this->session->get('person_id'),
+                'result'      => 'ok',
+                'notes'       => mb_substr('assigned:' . json_encode($patch + array_filter([
+                    'session_id' => $sessionUpdate,
+                    'tier_id'    => $tierUpdate,
+                ], static fn ($v) => $v !== null), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), 0, 255),
+            ]);
+
+            if (! $this->db->transCommit()) {
+                return $this->respondError('Failed to assign ticket.', 500);
+            }
+
+            $fresh = $this->loadTicketRow($id);
+
+            return $this->respondSuccess(['ticket' => $fresh ? $this->decorateTicket($fresh) : null], 'Ticket assigned.');
+        } catch (Throwable $e) {
+            try {
+                $this->db->transRollback();
+            } catch (Throwable $ignore) {
+            }
+            log_message('error', 'TicketsController::ticketAssign — ' . $e->getMessage());
+
+            return $this->respondError('Failed to assign ticket.', 500);
+        }
+    }
+
+    // ---------- public transfer (two-step) ----------
+
+    public function ticketTransferRequest(string $code): ResponseInterface
+    {
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets transfers migration is required.', 503);
+        }
+        if (! $this->publicRateLimit('ticket_transfer', 10, 60)) {
+            return $this->respondError('Too many transfer attempts.', 429);
+        }
+        $normalized = strtoupper(trim($code));
+        if (! preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid ticket code.', 422);
+        }
+
+        $body           = $this->request->getJSON(true) ?? [];
+        $toEmail        = trim((string) ($body['to_email'] ?? ''));
+        $toPhone        = trim((string) ($body['to_phone'] ?? ''));
+        $idempotencyKey = mb_substr((string) ($body['idempotency_key'] ?? bin2hex(random_bytes(8))), 0, 64);
+
+        if ($toEmail === '' && $toPhone === '') {
+            return $this->respondError('to_email or to_phone is required.', 422);
+        }
+        if ($toEmail !== '' && ! filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            return $this->respondError('to_email is not a valid email address.', 422);
+        }
+        $channel = $toEmail !== '' ? 'email' : 'sms';
+        $contact = $toEmail !== '' ? strtolower($toEmail) : preg_replace('/\s+/', '', $toPhone);
+
+        try {
+            $ticket = $this->db->table('tickets')->where('code', $normalized)->where('deleted', 0)->get()->getRowArray();
+            if ($ticket === null) {
+                return $this->respondError('Ticket not found.', 404);
+            }
+
+            $product = $this->loadProductRow((int) $ticket['ticket_product_id']);
+            if ($product === null) {
+                return $this->respondError('Ticket product not found.', 404);
+            }
+            if ((int) $product['transferable'] !== 1) {
+                return $this->respondError('This ticket is not transferable.', 409);
+            }
+            if (! in_array((string) $ticket['status'], ['issued', 'active'], true)) {
+                return $this->respondError('Ticket cannot be transferred in its current state.', 409);
+            }
+
+            $cap  = (int) $this->getAppConfig('ticket_transfer_max_per_ticket', '5');
+            $done = (int) $this->db->table('ticket_transfers')
+                ->where('ticket_id', $ticket['ticket_id'])
+                ->where('verified_at IS NOT NULL', null, false)
+                ->countAllResults();
+            if ($done >= $cap) {
+                return $this->respondError("Transfer cap reached ({$cap}).", 409);
+            }
+
+            $prior = $this->db->table('ticket_transfers')
+                ->where('ticket_id', $ticket['ticket_id'])
+                ->where('client_idempotency_key', $idempotencyKey)
+                ->get()
+                ->getRowArray();
+            if ($prior !== null) {
+                return $this->respondSuccess([
+                    'transfer_id'        => (int) $prior['transfer_id'],
+                    'channel'            => (string) $prior['channel'],
+                    'expires_at'         => $prior['verification_expires_at'],
+                    'verification_token' => null,
+                    'message'            => 'Existing transfer request returned.',
+                ]);
+            }
+
+            $token   = strtoupper(bin2hex(random_bytes(4)));
+            $ttlMin  = max(1, (int) $this->getAppConfig('ticket_transfer_verify_ttl_min', '15'));
+            $expires = (new DateTimeImmutable())->modify("+{$ttlMin} minutes");
+
+            $this->db->table('ticket_transfers')->insert([
+                'ticket_id'               => (int) $ticket['ticket_id'],
+                'from_contact_hash'       => null,
+                'to_contact_hash'         => $this->hashContact($contact),
+                'to_contact_last4'        => mb_substr($contact, -4),
+                'channel'                 => $channel,
+                'verification_token_hash' => hash('sha256', $token),
+                'verification_sent_at'    => date('Y-m-d H:i:s'),
+                'verification_expires_at' => $expires->format('Y-m-d H:i:s'),
+                'verified_at'             => null,
+                'ip'                      => $this->request->getIPAddress() ?: null,
+                'user_agent'              => mb_substr((string) $this->request->getUserAgent(), 0, 255),
+                'client_idempotency_key'  => $idempotencyKey,
+            ]);
+            $transferId  = (int) $this->db->insertID();
+            $inlineToken = $this->getAppConfig('ticket_transfer_inline_token', '0') === '1';
+
+            return $this->respondSuccess([
+                'transfer_id'        => $transferId,
+                'channel'            => $channel,
+                'expires_at'         => $expires->format('c'),
+                'verification_token' => $inlineToken ? $token : null,
+                'message'            => $inlineToken
+                    ? 'Transfer requested. Token returned inline (dev mode).'
+                    : 'Transfer requested. Verification token sent.',
+            ], 'Transfer requested.', 202);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::ticketTransferRequest — ' . $e->getMessage());
+
+            return $this->respondError('Failed to request transfer.', 500);
+        }
+    }
+
+    public function ticketTransferConfirm(string $code): ResponseInterface
+    {
+        if (! $this->phase2MigrationApplied()) {
+            return $this->respondError('Tickets transfers migration is required.', 503);
+        }
+        if (! $this->publicRateLimit('ticket_transfer_confirm', 30, 60)) {
+            return $this->respondError('Too many confirmation attempts.', 429);
+        }
+        $normalized = strtoupper(trim($code));
+        if (! preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid ticket code.', 422);
+        }
+
+        $body       = $this->request->getJSON(true) ?? [];
+        $transferId = (int) ($body['transfer_id'] ?? 0);
+        $token      = strtoupper(trim((string) ($body['verification_token'] ?? '')));
+        if ($transferId <= 0 || $token === '') {
+            return $this->respondError('transfer_id and verification_token are required.', 422);
+        }
+
+        try {
+            $this->db->transBegin();
+
+            $ticket = $this->db->table('tickets')->where('code', $normalized)->where('deleted', 0)->get()->getRowArray();
+            if ($ticket === null) {
+                $this->db->transRollback();
+
+                return $this->respondError('Ticket not found.', 404);
+            }
+
+            $transfer = $this->db->table('ticket_transfers')
+                ->where('transfer_id', $transferId)
+                ->where('ticket_id', $ticket['ticket_id'])
+                ->get()
+                ->getRowArray();
+            if ($transfer === null) {
+                $this->db->transRollback();
+
+                return $this->respondError('Transfer request not found.', 404);
+            }
+            if (! empty($transfer['verified_at'])) {
+                $this->db->transRollback();
+
+                return $this->respondError('Transfer already completed.', 409);
+            }
+            if (! empty($transfer['verification_expires_at']) && strtotime((string) $transfer['verification_expires_at']) < time()) {
+                $this->db->transRollback();
+
+                return $this->respondError('Verification token expired.', 410);
+            }
+            if (! hash_equals((string) $transfer['verification_token_hash'], hash('sha256', $token))) {
+                $this->db->transRollback();
+
+                return $this->respondError('Verification token is incorrect.', 422);
+            }
+
+            $this->db->table('ticket_transfers')->where('transfer_id', $transferId)->update(['verified_at' => date('Y-m-d H:i:s')]);
+
+            $history = ! empty($ticket['transfer_history_json'])
+                ? (array) json_decode((string) $ticket['transfer_history_json'], true)
+                : [];
+            $history[] = [
+                'type'        => 'transfer',
+                'transfer_id' => $transferId,
+                'channel'     => (string) $transfer['channel'],
+                'to_last4'    => (string) $transfer['to_contact_last4'],
+                'at'          => date('c'),
+            ];
+            $this->db->table('tickets')->where('ticket_id', $ticket['ticket_id'])->update([
+                'transfer_history_json' => json_encode($history),
+                'customer_id'           => null,
+            ]);
+
+            if (! $this->db->transCommit()) {
+                return $this->respondError('Failed to confirm transfer.', 500);
+            }
+
+            return $this->respondSuccess([
+                'transfer_id' => $transferId,
+                'channel'     => (string) $transfer['channel'],
+                'to_last4'    => (string) $transfer['to_contact_last4'],
+                'message'     => 'Transfer completed.',
+            ], 'Transfer completed.');
+        } catch (Throwable $e) {
+            try {
+                $this->db->transRollback();
+            } catch (Throwable $ignore) {
+            }
+            log_message('error', 'TicketsController::ticketTransferConfirm — ' . $e->getMessage());
+
+            return $this->respondError('Failed to confirm transfer.', 500);
+        }
+    }
+
+    // ========================================================================
+    // Phase 3 — translations, delivery, iCal, Apple/Google Wallet
+    // ========================================================================
+
+    // ---------- translations CRUD ----------
+
+    public function translationIndex(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase3MigrationApplied()) {
+            return $this->respondError('Tickets translations migration is required.', 503);
+        }
+        if ($this->loadProductRow($productId) === null) {
+            return $this->respondError('Ticket product not found.', 404);
+        }
+
+        try {
+            $rows = $this->db->table('ticket_product_translations')
+                ->where('ticket_product_id', $productId)
+                ->orderBy('locale', 'ASC')
+                ->get()
+                ->getResultArray();
+
+            return $this->respondSuccess(['translations' => $rows]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::translationIndex — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load translations.', 500);
+        }
+    }
+
+    public function translationUpsert(int $productId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase3MigrationApplied()) {
+            return $this->respondError('Tickets translations migration is required.', 503);
+        }
+        if ($this->loadProductRow($productId) === null) {
+            return $this->respondError('Ticket product not found.', 404);
+        }
+
+        $body   = $this->request->getJSON(true) ?? [];
+        $locale = trim((string) ($body['locale'] ?? ''));
+        if (! preg_match('/^[a-zA-Z]{2,3}([_-][a-zA-Z]{2,4})?$/', $locale)) {
+            return $this->respondError('locale must be an IETF tag like en, en-US, zh-CN.', 422);
+        }
+
+        try {
+            $this->db->table('ticket_product_translations')->replace([
+                'ticket_product_id' => $productId,
+                'locale'            => $locale,
+                'title'             => $this->stringOrNull($body['title'] ?? null, 255),
+                'notice'            => $this->stringOrNull($body['notice'] ?? null, 255),
+                'description'       => $body['description'] ?? null,
+            ]);
+            $row = $this->db->table('ticket_product_translations')
+                ->where('ticket_product_id', $productId)
+                ->where('locale', $locale)
+                ->get()
+                ->getRowArray();
+
+            return $this->respondSuccess(['translation' => $row], 'Translation saved.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::translationUpsert — ' . $e->getMessage());
+
+            return $this->respondError('Failed to save translation.', 500);
+        }
+    }
+
+    public function translationDelete(int $productId, string $locale): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase3MigrationApplied()) {
+            return $this->respondError('Tickets translations migration is required.', 503);
+        }
+
+        try {
+            $this->db->table('ticket_product_translations')
+                ->where('ticket_product_id', $productId)
+                ->where('locale', $locale)
+                ->delete();
+
+            return $this->respondSuccess(['locale' => $locale], 'Translation removed.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::translationDelete — ' . $e->getMessage());
+
+            return $this->respondError('Failed to remove translation.', 500);
+        }
+    }
+
+    // ---------- resend delivery ----------
+
+    public function ticketResendDelivery(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->phase3MigrationApplied()) {
+            return $this->respondError('Tickets delivery migration is required.', 503);
+        }
+
+        $body  = $this->request->getJSON(true) ?? [];
+        $email = trim((string) ($body['email'] ?? ''));
+        $phone = trim((string) ($body['phone'] ?? ''));
+        if ($email === '' && $phone === '') {
+            return $this->respondError('email or phone is required.', 422);
+        }
+        if ($email !== '' && ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return $this->respondError('Invalid email.', 422);
+        }
+
+        $row = $this->db->table('tickets')
+            ->select('tickets.*, ticket_products.title, ticket_products.brand_name, ticket_products.notice')
+            ->join('ticket_products', 'ticket_products.ticket_product_id = tickets.ticket_product_id', 'left')
+            ->where('ticket_id', $id)
+            ->where('tickets.deleted', 0)
+            ->get()
+            ->getRow();
+        if ($row === null) {
+            return $this->respondError('Ticket not found.', 404);
+        }
+
+        try {
+            $result = service('ticket_delivery_lib')->dispatch($row, $email !== '' ? $email : null, $phone !== '' ? $phone : null);
+
+            return $this->respondSuccess(['delivery' => $result], 'Delivery dispatched.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::ticketResendDelivery — ' . $e->getMessage());
+
+            return $this->respondError('Failed to dispatch delivery: ' . $e->getMessage(), 500);
+        }
+    }
+
+    // ---------- public iCal + wallet ----------
+
+    public function publicTicketIcs(string $code): ResponseInterface
+    {
+        if (! $this->publicRateLimit('ticket_ics', 60, 60)) {
+            return $this->respondError('Too many requests.', 429);
+        }
+        $normalized = strtoupper(trim($code));
+        if (! preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid ticket code.', 422);
+        }
+
+        $row = $this->loadPublicTicketWithProduct($normalized);
+        if ($row === null) {
+            return $this->respondError('Ticket not found.', 404);
+        }
+
+        $ics = $this->buildIcs($row, $normalized);
+
+        return $this->response
+            ->setHeader('Content-Type', 'text/calendar; charset=utf-8')
+            ->setHeader('Content-Disposition', 'attachment; filename="' . $normalized . '.ics"')
+            ->setBody($ics);
+    }
+
+    public function publicTicketGoogleWallet(string $code): ResponseInterface
+    {
+        if (! $this->phase3MigrationApplied()) {
+            return $this->respondError('Wallet endpoints require Phase 3 migration.', 503);
+        }
+        if (! $this->publicRateLimit('ticket_gwallet', 30, 60)) {
+            return $this->respondError('Too many requests.', 429);
+        }
+
+        $normalized = strtoupper(trim($code));
+        if (! preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid ticket code.', 422);
+        }
+
+        $row = $this->loadPublicTicketWithProduct($normalized);
+        if ($row === null) {
+            return $this->respondError('Ticket not found.', 404);
+        }
+
+        try {
+            $product = (object) [
+                'ticket_product_id' => $row->ticket_product_id,
+                'title'             => $row->title,
+                'brand_name'        => $row->brand_name,
+                'color'             => $row->color ?? null,
+            ];
+            $redemptionUrl = service('qr_lib')->build_redemption_url($normalized);
+            $saveUrl       = service('google_wallet_lib')->buildSaveUrl($row, $product, $redemptionUrl);
+
+            return $this->respondSuccess(['save_url' => $saveUrl], 'Google Wallet save URL generated.');
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::publicTicketGoogleWallet — ' . $e->getMessage());
+
+            return $this->respondError($e->getMessage(), 503);
+        }
+    }
+
+    public function publicTicketAppleWallet(string $code): ResponseInterface
+    {
+        if (! $this->phase3MigrationApplied()) {
+            return $this->respondError('Wallet endpoints require Phase 3 migration.', 503);
+        }
+        if (! $this->publicRateLimit('ticket_apple', 30, 60)) {
+            return $this->respondError('Too many requests.', 429);
+        }
+
+        $normalized = strtoupper(trim($code));
+        if (! preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid ticket code.', 422);
+        }
+
+        $row = $this->loadPublicTicketWithProduct($normalized);
+        if ($row === null) {
+            return $this->respondError('Ticket not found.', 404);
+        }
+
+        try {
+            $product = (object) [
+                'ticket_product_id' => $row->ticket_product_id,
+                'title'             => $row->title,
+                'brand_name'        => $row->brand_name,
+                'color'             => $row->color ?? null,
+            ];
+            $redemptionUrl = service('qr_lib')->build_redemption_url($normalized);
+            $pkpass        = service('apple_pkpass_lib')->build($row, $product, $redemptionUrl);
+
+            return $this->response
+                ->setHeader('Content-Type', 'application/vnd.apple.pkpass')
+                ->setHeader('Content-Disposition', 'attachment; filename="' . $normalized . '.pkpass"')
+                ->setBody($pkpass);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::publicTicketAppleWallet — ' . $e->getMessage());
+
+            return $this->respondError($e->getMessage(), 503);
+        }
+    }
+
+    // ========================================================================
+    // Phase 2 + 3 helpers
+    // ========================================================================
+
+    private function loadSessionRow(int $productId, int $sessionId): ?array
+    {
+        $row = $this->db->table('ticket_product_sessions')
+            ->where('session_id', $sessionId)
+            ->where('ticket_product_id', $productId)
+            ->where('deleted', 0)
+            ->get()
+            ->getRowArray();
+
+        return $row ?: null;
+    }
+
+    private function loadTierRow(int $productId, int $tierId): ?array
+    {
+        $row = $this->db->table('ticket_product_tiers')
+            ->where('tier_id', $tierId)
+            ->where('ticket_product_id', $productId)
+            ->where('deleted', 0)
+            ->get()
+            ->getRowArray();
+
+        return $row ?: null;
+    }
+
+    private function decorateSession(array $row): array
+    {
+        $quantity                 = $row['quantity'] === null ? null : (int) $row['quantity'];
+        $issued                   = (int) ($row['quantity_issued'] ?? 0);
+        $row['session_id']        = (int) $row['session_id'];
+        $row['ticket_product_id'] = (int) $row['ticket_product_id'];
+        $row['quantity']          = $quantity;
+        $row['quantity_issued']   = $issued;
+        $row['remaining']         = $quantity === null ? null : max(0, $quantity - $issued);
+        $row['sold_out']          = $quantity !== null && $issued >= $quantity;
+
+        return $row;
+    }
+
+    private function decorateTier(array $row): array
+    {
+        $quantity                 = $row['quantity'] === null ? null : (int) $row['quantity'];
+        $issued                   = (int) ($row['quantity_issued'] ?? 0);
+        $row['tier_id']           = (int) $row['tier_id'];
+        $row['ticket_product_id'] = (int) $row['ticket_product_id'];
+        $row['quantity']          = $quantity;
+        $row['quantity_issued']   = $issued;
+        $row['remaining']         = $quantity === null ? null : max(0, $quantity - $issued);
+        $row['sold_out']          = $quantity !== null && $issued >= $quantity;
+        $row['price']             = (string) $row['price'];
+
+        return $row;
+    }
+
+    private function validateSessionPayload(array $body, bool $isCreate): string|true
+    {
+        if ($isCreate || array_key_exists('starts_at', $body)) {
+            $startsAt = $this->parseDateTime($body['starts_at'] ?? null);
+            if ($isCreate && $startsAt === null) {
+                return 'starts_at is required.';
+            }
+            if (array_key_exists('ends_at', $body) && ! empty($body['ends_at'])) {
+                $endsAt = $this->parseDateTime($body['ends_at']);
+                if ($endsAt === null) {
+                    return 'ends_at is invalid.';
+                }
+                if ($startsAt !== null && strtotime($endsAt) < strtotime($startsAt)) {
+                    return 'ends_at must be after starts_at.';
+                }
+            }
+        }
+        if (isset($body['quantity']) && $body['quantity'] !== null && (int) $body['quantity'] < 0) {
+            return 'quantity must be a non-negative integer or null.';
+        }
+        if (isset($body['status']) && ! in_array((string) $body['status'], self::ALLOWED_SESSION_STATUSES, true)) {
+            return 'status must be one of: ' . implode(', ', self::ALLOWED_SESSION_STATUSES);
+        }
+
+        return true;
+    }
+
+    private function buildSessionRow(array $body, int $productId): array
+    {
+        $row = [
+            'ticket_product_id' => $productId,
+            'label'             => $this->stringOrNull($body['label'] ?? null, 255),
+            'starts_at'         => $this->parseDateTime($body['starts_at'] ?? null),
+            'ends_at'           => $this->parseDateTime($body['ends_at'] ?? null),
+            'quantity'          => $this->intOrNull($body['quantity'] ?? null),
+            'hall'              => $this->stringOrNull($body['hall'] ?? null, 128),
+            'gate'              => $this->stringOrNull($body['gate'] ?? null, 128),
+            'status'            => isset($body['status']) && in_array((string) $body['status'], self::ALLOWED_SESSION_STATUSES, true)
+                ? (string) $body['status']
+                : 'scheduled',
+        ];
+        if (array_key_exists('seat_map', $body)) {
+            $row['seat_map_json'] = is_array($body['seat_map']) ? json_encode($body['seat_map']) : null;
+        }
+
+        return $row;
+    }
+
+    private function validateTierPayload(array $body, bool $isCreate): string|true
+    {
+        if ($isCreate) {
+            $name = trim((string) ($body['name'] ?? ''));
+            if ($name === '') {
+                return 'name is required.';
+            }
+        }
+        if (isset($body['name']) && mb_strlen((string) $body['name']) > 128) {
+            return 'name is too long (max 128).';
+        }
+        if (isset($body['price']) && ! $this->isValidMoney((string) $body['price'])) {
+            return 'price must be a non-negative decimal with up to 2 places.';
+        }
+        if (isset($body['quantity']) && $body['quantity'] !== null && (int) $body['quantity'] < 0) {
+            return 'quantity must be a non-negative integer or null.';
+        }
+
+        return true;
+    }
+
+    private function buildTierRow(array $body, int $productId): array
+    {
+        return [
+            'ticket_product_id' => $productId,
+            'name'              => mb_substr((string) ($body['name'] ?? ''), 0, 128),
+            'price'             => $this->parseMoney($body['price'] ?? '0') ?? '0.00',
+            'quantity'          => $this->intOrNull($body['quantity'] ?? null),
+            'sort_order'        => (int) ($body['sort_order'] ?? 0),
+            'color'             => $this->stringOrNull($body['color'] ?? null, 16),
+            'description'       => $this->stringOrNull($body['description'] ?? null, 255),
+        ];
+    }
+
+    private function isValidMoney(string $v): bool
+    {
+        return preg_match('/^\d+(\.\d{1,2})?$/', trim($v)) === 1;
+    }
+
+    private function parseMoney(mixed $v): ?string
+    {
+        if ($v === null || $v === '') {
+            return '0.00';
+        }
+        $s = is_string($v) ? trim($v) : (string) $v;
+        $s = str_replace([' ', ','], ['', '.'], $s);
+        if (! $this->isValidMoney($s)) {
+            return null;
+        }
+
+        return bcadd($s, '0', 2);
+    }
+
+    private function hashContact(string $contact): string
+    {
+        $secret = $this->getAppConfig('ticket_transfer_hmac_secret', '');
+        if ($secret === '') {
+            $secret = 'ticket-transfer-fallback-' . hash('sha256', __FILE__);
+        }
+
+        return hash_hmac('sha256', strtolower(trim($contact)), $secret);
+    }
+
+    private function getAppConfig(string $key, string $default = ''): string
+    {
+        try {
+            $row = $this->db->table('app_config')->where('key', $key)->get()->getRowArray();
+
+            return $row !== null ? (string) $row['value'] : $default;
+        } catch (Throwable $e) {
+            return $default;
+        }
+    }
+
+    private function loadPublicTicketWithProduct(string $code): ?object
+    {
+        $row = $this->db->table('tickets')
+            ->select('tickets.*, ticket_products.title, ticket_products.brand_name, ticket_products.color, ticket_products.notice, ticket_products.description AS product_description')
+            ->join('ticket_products', 'ticket_products.ticket_product_id = tickets.ticket_product_id', 'left')
+            ->where('code', $code)
+            ->where('tickets.deleted', 0)
+            ->get()
+            ->getRow();
+
+        return $row ?: null;
+    }
+
+    private function buildIcs(object $row, string $code): string
+    {
+        $dtFmt = static function (?string $iso): string {
+            if ($iso === null || $iso === '') {
+                return '';
+            }
+            $ts = strtotime($iso);
+            if ($ts === false) {
+                return '';
+            }
+
+            return gmdate('Ymd\THis\Z', $ts);
+        };
+        $esc = static fn (string $s): string => str_replace(['\\', "\n", ',', ';'], ['\\\\', '\\n', '\\,', '\\;'], $s);
+
+        $start = $dtFmt($row->valid_from ?? null);
+        $end   = $dtFmt(($row->valid_to ?? null) ?: ($row->valid_from ?? null));
+        $title = (string) ($row->title ?? 'Ticket');
+        $desc  = (string) ($row->product_description ?? $row->notice ?? '');
+
+        $lines = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//Pesaswap//Tickets//EN',
+            'BEGIN:VEVENT',
+            'UID:' . $code . '@pesaswap',
+            'DTSTAMP:' . gmdate('Ymd\THis\Z'),
+        ];
+        if ($start !== '') {
+            $lines[] = 'DTSTART:' . $start;
+        }
+        if ($end !== '') {
+            $lines[] = 'DTEND:' . $end;
+        }
+        $lines[] = 'SUMMARY:' . $esc($title);
+        if ($desc !== '') {
+            $lines[] = 'DESCRIPTION:' . $esc($desc);
+        }
+        $lines[] = 'END:VEVENT';
+        $lines[] = 'END:VCALENDAR';
+
+        return implode("\r\n", $lines) . "\r\n";
     }
 }

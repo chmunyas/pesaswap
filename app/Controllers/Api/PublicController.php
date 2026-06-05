@@ -86,9 +86,39 @@ class PublicController extends BaseApiController
      */
     public function ticketLookup(string $code): ResponseInterface
     {
+        return $this->delegateToTickets('publicLookup', $code);
+    }
+
+    public function ticketTransferRequest(string $code): ResponseInterface
+    {
+        return $this->delegateToTickets('ticketTransferRequest', $code);
+    }
+
+    public function ticketTransferConfirm(string $code): ResponseInterface
+    {
+        return $this->delegateToTickets('ticketTransferConfirm', $code);
+    }
+
+    public function ticketIcs(string $code): ResponseInterface
+    {
+        return $this->delegateToTickets('publicTicketIcs', $code);
+    }
+
+    public function ticketGoogleWallet(string $code): ResponseInterface
+    {
+        return $this->delegateToTickets('publicTicketGoogleWallet', $code);
+    }
+
+    public function ticketAppleWallet(string $code): ResponseInterface
+    {
+        return $this->delegateToTickets('publicTicketAppleWallet', $code);
+    }
+
+    private function delegateToTickets(string $method, string $code): ResponseInterface
+    {
         $tk = new TicketsController();
         $tk->initController($this->request, $this->response, service('logger'));
 
-        return $tk->publicLookup($code);
+        return $tk->{$method}($code);
     }
 }
