@@ -2,10 +2,10 @@
 
 namespace App\Models;
 
-use App\Libraries\Ticket_token_lib;
 use CodeIgniter\Database\ResultInterface;
 use CodeIgniter\Model;
 use DateTimeImmutable;
+use DateTimeInterface;
 use Throwable;
 
 /**
@@ -23,11 +23,26 @@ use Throwable;
  */
 class Ticket extends Model
 {
-    protected $table          = 'tickets';
-    protected $primaryKey     = 'ticket_id';
+    public const STATUS_ISSUED                = 'issued';
+    public const STATUS_ACTIVE                = 'active';
+    public const STATUS_REDEEMED              = 'redeemed';
+    public const STATUS_REFUNDED              = 'refunded';
+    public const STATUS_REVOKED               = 'revoked';
+    public const STATUS_EXPIRED               = 'expired';
+    public const REDEMPTION_OK                = 'ok';
+    public const REDEMPTION_ALREADY_REDEEMED  = 'already_redeemed';
+    public const REDEMPTION_EXPIRED           = 'expired';
+    public const REDEMPTION_REVOKED           = 'revoked';
+    public const REDEMPTION_NOT_YET_VALID     = 'not_yet_valid';
+    public const REDEMPTION_WRONG_LOCATION    = 'wrong_location';
+    public const REDEMPTION_INVALID_SIGNATURE = 'invalid_signature';
+    public const REDEMPTION_NOT_FOUND         = 'not_found';
+
+    protected $table            = 'tickets';
+    protected $primaryKey       = 'ticket_id';
     protected $useAutoIncrement = true;
-    protected $useSoftDeletes = false;
-    protected $allowedFields  = [
+    protected $useSoftDeletes   = false;
+    protected $allowedFields    = [
         'ticket_product_id',
         'sale_id',
         'sale_item_seq',
@@ -47,22 +62,6 @@ class Ticket extends Model
         'deleted',
     ];
 
-    public const STATUS_ISSUED   = 'issued';
-    public const STATUS_ACTIVE   = 'active';
-    public const STATUS_REDEEMED = 'redeemed';
-    public const STATUS_REFUNDED = 'refunded';
-    public const STATUS_REVOKED  = 'revoked';
-    public const STATUS_EXPIRED  = 'expired';
-
-    public const REDEMPTION_OK                = 'ok';
-    public const REDEMPTION_ALREADY_REDEEMED  = 'already_redeemed';
-    public const REDEMPTION_EXPIRED           = 'expired';
-    public const REDEMPTION_REVOKED           = 'revoked';
-    public const REDEMPTION_NOT_YET_VALID     = 'not_yet_valid';
-    public const REDEMPTION_WRONG_LOCATION    = 'wrong_location';
-    public const REDEMPTION_INVALID_SIGNATURE = 'invalid_signature';
-    public const REDEMPTION_NOT_FOUND         = 'not_found';
-
     /**
      * Issue a new ticket for a sale line. Returns ['ticket' => stdClass, 'token' => string].
      *
@@ -71,8 +70,8 @@ class Ticket extends Model
      *     sale_id:?int,
      *     sale_item_seq:?int,
      *     customer_id:?int,
-     *     valid_from:?\DateTimeInterface,
-     *     valid_to:?\DateTimeInterface,
+     *     valid_from:?DateTimeInterface,
+     *     valid_to:?DateTimeInterface,
      *     seat_assignment:?array<string,mixed>
      * } $params
      *
@@ -93,7 +92,7 @@ class Ticket extends Model
             'customer_id'          => $params['customer_id'] ?? null,
             'status'               => self::STATUS_ISSUED,
             'valid_from'           => isset($params['valid_from']) ? $params['valid_from']->format('Y-m-d H:i:s') : null,
-            'valid_to'             => isset($params['valid_to'])   ? $params['valid_to']->format('Y-m-d H:i:s')   : null,
+            'valid_to'             => isset($params['valid_to']) ? $params['valid_to']->format('Y-m-d H:i:s') : null,
             'seat_assignment_json' => isset($params['seat_assignment']) ? json_encode($params['seat_assignment']) : null,
             'issued_at'            => $now->format('Y-m-d H:i:s'),
         ];
@@ -105,7 +104,7 @@ class Ticket extends Model
         $this->db->query(
             'UPDATE ' . $this->db->prefixTable('ticket_products')
             . ' SET quantity_issued = quantity_issued + 1 WHERE ticket_product_id = ?',
-            [(int) $params['ticket_product_id']]
+            [(int) $params['ticket_product_id']],
         );
 
         $tokenLib = service('ticket_token_lib');
@@ -127,10 +126,7 @@ class Ticket extends Model
      * transaction; the (ticket_id, idempotency_key) UNIQUE on
      * ticket_redemptions ensures retries return the same outcome.
      *
-     * @param string  $token            Full JWT scanned/entered by the cashier.
-     * @param int     $employeeId
-     * @param int|null $locationId
-     * @param string|null $idempotencyKey
+     * @param string $token Full JWT scanned/entered by the cashier.
      *
      * @return array{result:string, ticket_id:?int, message:string}
      */
@@ -139,7 +135,7 @@ class Ticket extends Model
         $tokenLib = service('ticket_token_lib');
         $payload  = $tokenLib->verify($token);
 
-        if ($payload === null || !isset($payload['tid'])) {
+        if ($payload === null || ! isset($payload['tid'])) {
             return ['result' => self::REDEMPTION_INVALID_SIGNATURE, 'ticket_id' => null, 'message' => 'Invalid ticket signature'];
         }
 
@@ -188,7 +184,7 @@ class Ticket extends Model
                  SET status = ?, redeemed_at = ?, redeemed_by_employee = ?, redeemed_at_location = ?,
                      redeem_count = redeem_count + 1
                  WHERE ticket_id = ? AND status IN (?, ?)',
-                [self::STATUS_REDEEMED, $now, $employeeId, $locationId, $ticketId, self::STATUS_ISSUED, self::STATUS_ACTIVE]
+                [self::STATUS_REDEEMED, $now, $employeeId, $locationId, $ticketId, self::STATUS_ISSUED, self::STATUS_ACTIVE],
             );
 
             if ($this->db->affectedRows() === 0) {
@@ -319,6 +315,7 @@ class Ticket extends Model
 
         for ($attempt = 0; $attempt < 5; $attempt++) {
             $code = '';
+
             for ($i = 0; $i < $len; $i++) {
                 $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
             }

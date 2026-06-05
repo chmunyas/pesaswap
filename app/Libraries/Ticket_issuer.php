@@ -34,8 +34,8 @@ class Ticket_issuer
      * Process a freshly-saved sale. Returns the list of issued tickets keyed
      * by sale_item line for downstream rendering (receipts/email).
      *
-     * @param array<int,array<string,mixed>> $items   The cart that was just persisted.
-     * @param object[] $itemInfos Per-line item info objects keyed by sale_item line.
+     * @param array<int,array<string,mixed>> $items     The cart that was just persisted.
+     * @param list<object>                   $itemInfos Per-line item info objects keyed by sale_item line.
      *
      * @return array<int, list<array{ticket:object, token:string}>>
      */
@@ -61,6 +61,7 @@ class Ticket_issuer
             $validity = $this->computeValidityWindow($product);
 
             $lineIssued = [];
+
             for ($unit = 0; $unit < $quantity; $unit++) {
                 $lineIssued[] = $this->ticket->issue([
                     'ticket_product_id' => (int) $product->ticket_product_id,
@@ -85,22 +86,21 @@ class Ticket_issuer
      */
     private function resolveProductForItem(int $item_id): ?object
     {
-        $db  = db_connect();
-        $row = $db->table('ticket_products')
+        $db = db_connect();
+
+        return $db->table('ticket_products')
             ->where('item_id', $item_id)
             ->where('deleted', 0)
             ->orderBy('ticket_product_id', 'asc')
             ->get(1)
             ->getRow();
-
-        return $row;
     }
 
     /**
      * Compute the [valid_from, valid_to] DateTime pair from the product's
      * validity_mode + dates.
      *
-     * @return array{from:?\DateTimeImmutable, to:?\DateTimeImmutable}
+     * @return array{from:?DateTimeImmutable, to:?DateTimeImmutable}
      */
     private function computeValidityWindow(object $product): array
     {
@@ -108,8 +108,8 @@ class Ticket_issuer
 
         if (($product->validity_mode ?? 'fixed') === 'fixed') {
             return [
-                'from' => !empty($product->begin_ts) ? new DateTimeImmutable($product->begin_ts) : null,
-                'to'   => !empty($product->end_ts)   ? new DateTimeImmutable($product->end_ts)   : null,
+                'from' => ! empty($product->begin_ts) ? new DateTimeImmutable($product->begin_ts) : null,
+                'to'   => ! empty($product->end_ts) ? new DateTimeImmutable($product->end_ts) : null,
             ];
         }
 

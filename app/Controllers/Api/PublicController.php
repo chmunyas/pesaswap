@@ -3,8 +3,6 @@
 namespace App\Controllers\Api;
 
 use CodeIgniter\HTTP\ResponseInterface;
-use CodeIgniter\HTTP\RequestInterface;
-use Psr\Log\LoggerInterface;
 
 /**
  * PublicController — exposes customer-safe endpoints that do NOT require a
@@ -33,7 +31,7 @@ class PublicController extends BaseApiController
     public function menu(string $tableId): ResponseInterface
     {
         // Sanitize: tableId must be 1-32 chars, alphanumeric + dash/underscore only
-        if (!preg_match('/^[A-Za-z0-9_-]{1,32}$/', $tableId)) {
+        if (! preg_match('/^[A-Za-z0-9_-]{1,32}$/', $tableId)) {
             return $this->respondError('Invalid table identifier.', 400);
         }
 
@@ -50,16 +48,14 @@ class PublicController extends BaseApiController
         // Stock-level availability is intentionally omitted here — the menu
         // is meant to show the catalogue; live availability is shown at the
         // point of order placement.
-        $items = array_map(static function (array $row): array {
-            return [
-                'item_id'     => (int)$row['item_id'],
-                'name'        => (string)$row['name'],
-                'category'    => (string)($row['category'] ?? 'Mains'),
-                'unit_price'  => (float)$row['unit_price'],
-                'description' => (string)($row['description'] ?? ''),
-                'available'   => true,
-            ];
-        }, $rows);
+        $items = array_map(static fn (array $row): array => [
+            'item_id'     => (int) $row['item_id'],
+            'name'        => (string) $row['name'],
+            'category'    => (string) ($row['category'] ?? 'Mains'),
+            'unit_price'  => (float) $row['unit_price'],
+            'description' => (string) ($row['description'] ?? ''),
+            'available'   => true,
+        ], $rows);
 
         return $this->respondSuccess([
             'table_id' => $tableId,
@@ -77,6 +73,7 @@ class PublicController extends BaseApiController
     {
         $gc = new GiftcardsController();
         $gc->initController($this->request, $this->response, service('logger'));
+
         return $gc->publicBalance($code);
     }
 
@@ -91,6 +88,7 @@ class PublicController extends BaseApiController
     {
         $tk = new TicketsController();
         $tk->initController($this->request, $this->response, service('logger'));
+
         return $tk->publicLookup($code);
     }
 }
