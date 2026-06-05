@@ -535,6 +535,16 @@ export function PosPage() {
 
 // ---------- ticket picker modal ----------
 
+interface TicketBundleRow {
+  bundle_id: number;
+  child_product_id: number;
+  child_title: string | null;
+  child_tier_id: number | null;
+  child_session_id: number | null;
+  quantity: number;
+  sort_order: number;
+}
+
 function TicketPickerModal({ item, onCancel, onAdd }: {
   item: Item;
   onCancel: () => void;
@@ -543,6 +553,7 @@ function TicketPickerModal({ item, onCancel, onAdd }: {
   const [productId, setProductId] = useState<number | null>(null);
   const [sessions, setSessions] = useState<TicketSession[]>([]);
   const [tiers, setTiers] = useState<TicketTier[]>([]);
+  const [bundles, setBundles] = useState<TicketBundleRow[]>([]);
   const [sessionId, setSessionId] = useState(0);
   const [tierId, setTierId] = useState(0);
   const [seatRow, setSeatRow] = useState('');
@@ -551,12 +562,10 @@ function TicketPickerModal({ item, onCancel, onAdd }: {
   const [loading, setLoading] = useState(true);
   const [unitPriceOverride, setUnitPriceOverride] = useState(Number(item.unit_price) || 0);
 
-  // Resolve product_id from item, then load sessions+tiers
+  // Resolve product_id from item, then load sessions+tiers+bundles
   useEffect(() => {
     void (async () => {
       try {
-        // ticket-products list filtered for item_id requires a custom param —
-        // workaround: fetch a page and find it client-side.
         const res = await api.tickets.products.list(1, 200, '', '');
         const products = ((res.data as unknown as { products?: Array<{ ticket_product_id: number; item_id: number }> })?.products) ?? [];
         const matching = products.find((p) => Number(p.item_id) === item.item_id);
@@ -566,12 +575,14 @@ function TicketPickerModal({ item, onCancel, onAdd }: {
           return;
         }
         setProductId(matching.ticket_product_id);
-        const [sRes, tRes] = await Promise.all([
+        const [sRes, tRes, bRes] = await Promise.all([
           api.tickets.products.sessions.list(matching.ticket_product_id),
           api.tickets.products.tiers.list(matching.ticket_product_id),
+          api.tickets.products.bundles.list(matching.ticket_product_id),
         ]);
         setSessions(((sRes.data as unknown as { sessions?: TicketSession[] })?.sessions) ?? []);
         setTiers(((tRes.data as unknown as { tiers?: TicketTier[] })?.tiers) ?? []);
+        setBundles(((bRes.data as unknown as { bundles?: TicketBundleRow[] })?.bundles) ?? []);
       } catch (err) {
         showToast(err instanceof Error ? err.message : 'Load failed', 'error');
         onCancel();
@@ -621,7 +632,24 @@ function TicketPickerModal({ item, onCancel, onAdd }: {
           <div className="flex h-32 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-fuchsia-500" /></div>
         ) : (
           <form onSubmit={handleAdd} className="p-4 space-y-3 text-sm">
-            {sessions.length > 0 && (
+            {bundles.length > 0 && (
+              <div className="rounded-lg border border-fuchsia-200 bg-fuchsia-50 p-3 dark:border-fuchsia-900 dark:bg-fuchsia-900/20">
+                <p className="text-[10px] font-bold uppercase text-fuchsia-700 dark:text-fuchsia-300">This bundle includes</p>
+                <ul className="mt-1 space-y-0.5 text-xs text-gray-800 dark:text-gray-200">
+                  {bundles.map((b) => (
+                    <li key={b.bundle_id}>
+                      <strong>{b.quantity}×</strong> {b.child_title ?? `Product #${b.child_product_id}`}
+                      {b.child_session_id && <span className="text-[10px] text-gray-500"> · session #{b.child_session_id}</span>}
+                      {b.child_tier_id && <span className="text-[10px] text-gray-500"> · tier #{b.child_tier_id}</span>}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[10px] text-gray-600 dark:text-gray-400">
+                  Selling {qty}× = <strong>{qty * bundles.reduce((s, b) => s + b.quantity, 0)} child tickets</strong> minted atomically. If any child's cap is exceeded the entire sale rolls back.
+                </p>
+              </div>
+            )}
+            {sessions.length > 0 && bundles.length === 0 && (
               <label className="block">
                 <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Session</span>
                 <select value={sessionId} onChange={(e) => setSessionId(Number(e.target.value))} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white">
@@ -636,7 +664,7 @@ function TicketPickerModal({ item, onCancel, onAdd }: {
                 </select>
               </label>
             )}
-            {tiers.length > 0 && (
+            {tiers.length > 0 && bundles.length === 0 && (
               <label className="block">
                 <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">Tier</span>
                 <select value={tierId} onChange={(e) => setTierId(Number(e.target.value))} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white">

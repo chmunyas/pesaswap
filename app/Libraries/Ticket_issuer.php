@@ -81,6 +81,24 @@ class Ticket_issuer
                 ? (int) $item_data['ticket_tier_id']
                 : null;
 
+            // Phase 5: if this product has bundle child rows, expand each
+            // unit into N child tickets instead of issuing the parent.
+            // Each child applies its own atomic 3-counter decrement and
+            // throws on overshoot, rolling the calling sale tx back.
+            $bundleRows = $this->loadBundleRows((int) $product->ticket_product_id);
+            if ($bundleRows !== []) {
+                $issued[$line] = $this->expandBundle(
+                    $product,
+                    $bundleRows,
+                    $quantity,
+                    $sale_id,
+                    $customer_id,
+                    $item_data,
+                );
+
+                continue;
+            }
+
             $validity = $this->computeValidityWindow($product, $sessionId);
 
             $lineIssued = [];
@@ -109,6 +127,124 @@ class Ticket_issuer
         }
 
         return $issued;
+    }
+
+    /**
+     * Phase 5: expand a bundle-parent sale line into its child tickets.
+     *
+     * For each cart unit (qty), iterate every bundle row and issue
+     * row.quantity child tickets. The child product / tier / session are
+     * pinned by the bundle row when set; otherwise the cart-line's
+     * ticket_session_id / ticket_tier_id win (so a bundle that says
+     * "any Friday session" still lets the operator pick which one).
+     *
+     * Counter bumps happen per child via the existing bumpCounters()
+     * path, so all three (child_product, child_session, child_tier)
+     * caps are atomically enforced. Any overshoot throws and rolls the
+     * sale back, never leaving half a bundle issued.
+     *
+     * @param array<int,object>   $bundleRows
+     * @param array<string,mixed> $item_data
+     *
+     * @return list<array{ticket:object, token:string}>
+     */
+    private function expandBundle(
+        object $parentProduct,
+        array $bundleRows,
+        int $quantity,
+        int $sale_id,
+        int $customer_id,
+        array $item_data,
+    ): array {
+        $cartSessionId = isset($item_data['ticket_session_id']) && $item_data['ticket_session_id'] !== null && $item_data['ticket_session_id'] !== ''
+            ? (int) $item_data['ticket_session_id']
+            : null;
+        $cartTierId = isset($item_data['ticket_tier_id']) && $item_data['ticket_tier_id'] !== null && $item_data['ticket_tier_id'] !== ''
+            ? (int) $item_data['ticket_tier_id']
+            : null;
+
+        $issuedRows = [];
+        $seq        = 0;
+
+        for ($unit = 0; $unit < $quantity; $unit++) {
+            foreach ($bundleRows as $bundle) {
+                $childProduct = $this->resolveProductById((int) $bundle->child_product_id);
+                if ($childProduct === null) {
+                    throw new RuntimeException(
+                        'Bundle child product '
+                        . (int) $bundle->child_product_id
+                        . ' (parent ' . (int) $parentProduct->ticket_product_id . ') was deleted; refusing to issue half a bundle.',
+                    );
+                }
+
+                $sessionId = $bundle->child_session_id !== null ? (int) $bundle->child_session_id : $cartSessionId;
+                $tierId    = $bundle->child_tier_id !== null ? (int) $bundle->child_tier_id : $cartTierId;
+
+                $perRowQty = (int) max(1, (int) $bundle->quantity);
+                $validity  = $this->computeValidityWindow($childProduct, $sessionId);
+
+                for ($i = 0; $i < $perRowQty; $i++) {
+                    $this->bumpCounters((int) $childProduct->ticket_product_id, $sessionId, $tierId);
+
+                    $issuedResult = $this->ticket->issue([
+                        'ticket_product_id' => (int) $childProduct->ticket_product_id,
+                        'session_id'        => $sessionId,
+                        'tier_id'           => $tierId,
+                        'sale_id'           => $sale_id,
+                        'sale_item_seq'     => $seq++,
+                        'customer_id'       => $customer_id > 0 ? $customer_id : null,
+                        'valid_from'        => $validity['from'],
+                        'valid_to'          => $validity['to'],
+                        'seat_assignment'   => $item_data['seat_assignment'] ?? null,
+                    ]);
+                    $issuedRows[] = $issuedResult;
+
+                    $this->safeDispatch($issuedResult['ticket'], $customer_id);
+                }
+            }
+        }
+
+        return $issuedRows;
+    }
+
+    /**
+     * Load active bundle rows for a parent product, ordered for stable
+     * sale_item_seq numbering. Empty array means the product is NOT a
+     * bundle (the caller falls through to normal single-ticket issuance).
+     *
+     * @return list<object>
+     */
+    private function loadBundleRows(int $parentProductId): array
+    {
+        $db = db_connect();
+        if (! $db->tableExists('ticket_product_bundles')) {
+            return [];
+        }
+
+        $rows = $db->table('ticket_product_bundles')
+            ->where('parent_product_id', $parentProductId)
+            ->where('deleted', 0)
+            ->orderBy('sort_order', 'ASC')
+            ->orderBy('bundle_id', 'ASC')
+            ->get()
+            ->getResultArray();
+
+        return array_map(static fn (array $r) => (object) $r, $rows);
+    }
+
+    /**
+     * Resolve a ticket product by ticket_product_id (vs resolveProductForItem
+     * which keys by items.item_id). Used by bundle expansion.
+     */
+    private function resolveProductById(int $ticketProductId): ?object
+    {
+        $db = db_connect();
+
+        return $db->table('ticket_products')
+            ->where('ticket_product_id', $ticketProductId)
+            ->where('deleted', 0)
+            ->get()
+            ->getRow();
     }
 
     /**

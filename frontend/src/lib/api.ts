@@ -254,6 +254,14 @@ export const api = {
         delete: (productId: number, tierId: number) =>
           request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/tiers/${tierId}`, { method: 'DELETE' }),
       },
+      bundles: {
+        list: (productId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/bundles`),
+        create: (productId: number, data: ApiData) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/bundles`, { method: 'POST', body: JSON.stringify(data) }),
+        delete: (productId: number, bundleId: number) =>
+          request<ApiResponse<EntityPayload>>(`/ticket-products/${productId}/bundles/${bundleId}`, { method: 'DELETE' }),
+      },
     },
     list: (page = 1, limit = 50, productId = 0, status = '', customerId = 0) =>
       request<ApiResponse<EntityPayload>>(
