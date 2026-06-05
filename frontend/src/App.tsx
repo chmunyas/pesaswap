@@ -40,6 +40,9 @@ const FxPage                     = lazy(() => import('./pages/FxPage').then((m) 
 const ResetPinPage               = lazy(() => import('./pages/ResetPinPage').then((m) => ({ default: m.ResetPinPage })));
 const PreviewPage                = lazy(() => import('./pages/PreviewPage').then((m) => ({ default: m.PreviewPage })));
 const PublicGiftCardPage         = lazy(() => import('./pages/PublicGiftCardPage').then((m) => ({ default: m.PublicGiftCardPage })));
+const PublicGiftCardTransferPage = lazy(() => import('./pages/PublicGiftCardTransferPage').then((m) => ({ default: m.PublicGiftCardTransferPage })));
+const GiftCardDesignsPage        = lazy(() => import('./pages/GiftCardDesignsPage').then((m) => ({ default: m.GiftCardDesignsPage })));
+const GiftCardDenominationsPage  = lazy(() => import('./pages/GiftCardDenominationsPage').then((m) => ({ default: m.GiftCardDenominationsPage })));
 const TicketsPage                = lazy(() => import('./pages/TicketsPage').then((m) => ({ default: m.TicketsPage })));
 const TicketsDashboardPage       = lazy(() => import('./pages/TicketsDashboardPage').then((m) => ({ default: m.TicketsDashboardPage })));
 const TicketPromosPage           = lazy(() => import('./pages/TicketPromosPage').then((m) => ({ default: m.TicketPromosPage })));
@@ -80,6 +83,7 @@ function AppRoutes() {
         <Route path="/menu/:tableId" element={<MenuPage />} />
         <Route path="/reset-pin" element={<ResetPinPage />} />
         <Route path="/giftcard/:code" element={<PublicGiftCardPage />} />
+        <Route path="/giftcard/transfer/:token" element={<PublicGiftCardTransferPage />} />
         <Route path="/ticket/:code" element={<PublicTicketPage />} />
         <Route path="/preview" element={<PreviewPage />} />
         <Route path="/preview/*" element={<PreviewPage />} />
@@ -98,6 +102,8 @@ function AppRoutes() {
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/receivings" element={<ReceivingsPage />} />
           <Route path="/giftcards" element={<GiftCardsPage />} />
+          <Route path="/giftcards/designs" element={<GiftCardDesignsPage />} />
+          <Route path="/giftcards/denominations" element={<GiftCardDenominationsPage />} />
           <Route path="/tickets" element={<TicketsPage />} />
           <Route path="/tickets/dashboard" element={<TicketsDashboardPage />} />
           <Route path="/tickets/promos" element={<TicketPromosPage />} />

@@ -68,6 +68,36 @@ const giftCardEndpoints = {
     request<ApiResponse<EntityPayload>>(`/giftcards/${id}/resend-email`, { method: 'POST' }),
   publicBalance: (code: string) =>
     request<ApiResponse<EntityPayload>>(`/public/giftcards/balance/${encodeURIComponent(code)}`),
+  // Send-as-gift transfer flow (modernization)
+  transfer: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/transfer`, { method: 'POST', body: JSON.stringify(data) }),
+  transferList: (id: number) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/transfers`),
+  transferCancel: (id: number, transferId: number) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/transfers/${transferId}`, { method: 'DELETE' }),
+  publicTransferLookup: (token: string) =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/transfer/${encodeURIComponent(token)}`),
+  publicTransferAccept: (token: string, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/transfer/${encodeURIComponent(token)}/accept`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  // Design templates + preset denominations (admin)
+  designs: {
+    list: () => request<ApiResponse<{ designs?: EntityPayload[] }>>('/giftcard-designs'),
+    get: (id: number) => request<ApiResponse<EntityPayload>>(`/giftcard-designs/${id}`),
+    create: (data: ApiData) => request<ApiResponse<EntityPayload>>('/giftcard-designs', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: ApiData) => request<ApiResponse<EntityPayload>>(`/giftcard-designs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) => request<ApiResponse>(`/giftcard-designs/${id}`, { method: 'DELETE' }),
+  },
+  denominations: {
+    list: (currency?: string) => request<ApiResponse<{ denominations?: EntityPayload[] }>>(
+      currency ? `/giftcard-denominations?currency=${encodeURIComponent(currency)}` : '/giftcard-denominations',
+    ),
+    create: (data: ApiData) => request<ApiResponse<EntityPayload>>('/giftcard-denominations', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: ApiData) => request<ApiResponse<EntityPayload>>(`/giftcard-denominations/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) => request<ApiResponse>(`/giftcard-denominations/${id}`, { method: 'DELETE' }),
+  },
 };
 
 const expenseEndpoints = {

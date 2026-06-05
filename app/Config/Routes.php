@@ -91,6 +91,23 @@ $routes->group('api', static function ($routes) {
     $routes->post('giftcards/(:num)/adjust', 'Api\GiftcardsController::adjust/$1');
     $routes->post('giftcards/(:num)/topup', 'Api\GiftcardsController::topup/$1');
     $routes->post('giftcards/(:num)/resend-email', 'Api\GiftcardsController::resendEmail/$1');
+    // Send-as-gift transfer flow (modernization)
+    $routes->post('giftcards/(:num)/transfer', 'Api\GiftcardsController::transferRequest/$1');
+    $routes->get('giftcards/(:num)/transfers', 'Api\GiftcardsController::transferList/$1');
+    $routes->delete('giftcards/(:num)/transfers/(:num)', 'Api\GiftcardsController::transferCancel/$1/$2');
+
+    // Design templates (admin)
+    $routes->get('giftcard-designs', 'Api\GiftcardsController::designIndex');
+    $routes->get('giftcard-designs/(:num)', 'Api\GiftcardsController::designShow/$1');
+    $routes->post('giftcard-designs', 'Api\GiftcardsController::designCreate');
+    $routes->put('giftcard-designs/(:num)', 'Api\GiftcardsController::designUpdate/$1');
+    $routes->delete('giftcard-designs/(:num)', 'Api\GiftcardsController::designDelete/$1');
+
+    // Preset denominations (admin)
+    $routes->get('giftcard-denominations', 'Api\GiftcardsController::denominationIndex');
+    $routes->post('giftcard-denominations', 'Api\GiftcardsController::denominationCreate');
+    $routes->put('giftcard-denominations/(:num)', 'Api\GiftcardsController::denominationUpdate/$1');
+    $routes->delete('giftcard-denominations/(:num)', 'Api\GiftcardsController::denominationDelete/$1');
 
     $routes->get('expenses', 'Api\ExpensesController::index');
     $routes->post('expenses', 'Api\ExpensesController::create');
@@ -176,6 +193,8 @@ $routes->group('api', static function ($routes) {
     // PUBLIC endpoints — no auth required. Customer-safe data only.
     $routes->get('public/menu/(:segment)', 'Api\PublicController::menu/$1');
     $routes->get('public/giftcards/balance/(:segment)', 'Api\PublicController::giftcardBalance/$1');
+    $routes->get('public/giftcards/transfer/(:segment)', 'Api\PublicController::giftcardTransferLookup/$1');
+    $routes->post('public/giftcards/transfer/(:segment)/accept', 'Api\PublicController::giftcardTransferAccept/$1');
     $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
     $routes->post('public/tickets/(:segment)/transfer/request', 'Api\PublicController::ticketTransferRequest/$1');
     $routes->post('public/tickets/(:segment)/transfer/confirm', 'Api\PublicController::ticketTransferConfirm/$1');
@@ -200,7 +219,14 @@ $routes->group('api', static function ($routes) {
     $routes->options('giftcards', 'Api\GiftcardsController::preflight');
     $routes->options('giftcards/(:num)', 'Api\GiftcardsController::preflight');
     $routes->options('giftcards/(:num)/(:any)', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcards/(:num)/transfers/(:num)', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcard-designs', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcard-designs/(:num)', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcard-denominations', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcard-denominations/(:num)', 'Api\GiftcardsController::preflight');
     $routes->options('public/giftcards/balance/(:segment)', 'Api\PublicController::preflight');
+    $routes->options('public/giftcards/transfer/(:segment)', 'Api\PublicController::preflight');
+    $routes->options('public/giftcards/transfer/(:segment)/accept', 'Api\PublicController::preflight');
     $routes->options('expenses', 'Api\ExpensesController::preflight');
     $routes->options('cashups', 'Api\CashupsController::preflight');
     $routes->options('cashups/(:num)', 'Api\CashupsController::preflight');

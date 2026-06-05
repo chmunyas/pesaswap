@@ -71,10 +71,26 @@ class PublicController extends BaseApiController
      */
     public function giftcardBalance(string $code): ResponseInterface
     {
-        $gc = new GiftcardsController();
-        $gc->initController($this->request, $this->response, service('logger'));
+        return $this->delegateToGiftcards('publicBalance', $code);
+    }
 
-        return $gc->publicBalance($code);
+    /**
+     * GET /api/public/giftcards/transfer/:token
+     * Sanitized preview of a pending send-as-gift transfer.
+     */
+    public function giftcardTransferLookup(string $token): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicTransferLookup', $token);
+    }
+
+    /**
+     * POST /api/public/giftcards/transfer/:token/accept
+     * Recipient accepts the transfer — rotates the giftcard_number, returns
+     * the NEW code (one-shot, never re-derivable from the DB).
+     */
+    public function giftcardTransferAccept(string $token): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicTransferAccept', $token);
     }
 
     /**
@@ -120,5 +136,13 @@ class PublicController extends BaseApiController
         $tk->initController($this->request, $this->response, service('logger'));
 
         return $tk->{$method}($code);
+    }
+
+    private function delegateToGiftcards(string $method, string $arg): ResponseInterface
+    {
+        $gc = new GiftcardsController();
+        $gc->initController($this->request, $this->response, service('logger'));
+
+        return $gc->{$method}($arg);
     }
 }
