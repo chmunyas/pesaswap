@@ -3705,4 +3705,84 @@ class TicketsController extends BaseApiController
 
         return $applied;
     }
+
+    // ========================================================================
+    // Cron cleanup — called from app/Commands/TicketsCleanup.php
+    // ========================================================================
+
+    /**
+     * Atomic UPDATE sweep called hourly by spark `tickets:cleanup`.
+     * Returns counts of rows touched per pass. All three passes are
+     * idempotent — running the same minute twice is harmless.
+     *
+     * @param array{max_retries:int, failed_ttl:int, limit:int} $opts
+     *
+     * @return array<string, int|string>
+     */
+    public function cleanupExpiredArtifacts(array $opts): array
+    {
+        $maxRetries = (int) ($opts['max_retries'] ?? 5);
+        $failedTtl  = (int) ($opts['failed_ttl'] ?? 24);
+        $limit      = (int) ($opts['limit'] ?? 500);
+
+        $summary = [
+            'seat_holds_released'       => 0,
+            'deliveries_bounced_age'    => 0,
+            'deliveries_bounced_retry'  => 0,
+            'transfers_expired'         => 0,
+        ];
+
+        try {
+            if ($this->db->tableExists('ticket_seat_holds')) {
+                $sql = sprintf(
+                    'UPDATE %s SET released_at = NOW() WHERE released_at IS NULL AND consumed_at IS NULL AND held_until < NOW() LIMIT %d',
+                    $this->db->prefixTable('ticket_seat_holds'),
+                    $limit,
+                );
+                $this->db->query($sql);
+                $summary['seat_holds_released'] = (int) $this->db->affectedRows();
+            }
+
+            if ($this->db->tableExists('ticket_delivery_attempts')) {
+                // Pass A: stuck in 'failed' beyond failed-ttl hours → bounce
+                $sql = sprintf(
+                    'UPDATE %s SET status = ' . "'bounced'" . ' WHERE status = ' . "'failed'" . ' AND last_attempt_at IS NOT NULL AND last_attempt_at < (NOW() - INTERVAL %d HOUR) LIMIT %d',
+                    $this->db->prefixTable('ticket_delivery_attempts'),
+                    $failedTtl,
+                    $limit,
+                );
+                $this->db->query($sql);
+                $summary['deliveries_bounced_age'] = (int) $this->db->affectedRows();
+
+                // Pass B: exceeded max retries regardless of age → bounce
+                $sql = sprintf(
+                    'UPDATE %s SET status = ' . "'bounced'" . ' WHERE status = ' . "'failed'" . ' AND attempts >= %d LIMIT %d',
+                    $this->db->prefixTable('ticket_delivery_attempts'),
+                    $maxRetries,
+                    $limit,
+                );
+                $this->db->query($sql);
+                $summary['deliveries_bounced_retry'] = (int) $this->db->affectedRows();
+            }
+
+            if ($this->db->tableExists('ticket_transfers')) {
+                // Expired un-verified transfers: clear the verification token so
+                // a fresh /transfer/request can be initiated without the stale
+                // token blocking it. We DO NOT delete the row — it stays as an
+                // audit record of the failed attempt.
+                $sql = sprintf(
+                    'UPDATE %s SET verification_token_hash = NULL WHERE verified_at IS NULL AND verification_expires_at IS NOT NULL AND verification_expires_at < NOW() AND verification_token_hash IS NOT NULL LIMIT %d',
+                    $this->db->prefixTable('ticket_transfers'),
+                    $limit,
+                );
+                $this->db->query($sql);
+                $summary['transfers_expired'] = (int) $this->db->affectedRows();
+            }
+        } catch (\Throwable $e) {
+            log_message('error', 'tickets:cleanup error: ' . $e->getMessage());
+            $summary['error'] = $e->getMessage();
+        }
+
+        return $summary;
+    }
 }
