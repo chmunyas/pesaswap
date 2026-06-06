@@ -50,16 +50,28 @@
         <const name="CONFIGPATH" value="./app/Config/"/>
         <!-- Directory containing the front controller (index.php) -->
         <const name="PUBLICPATH" value="./public/"/>
-        <!-- Database configuration for testing -->
-        <env name="database.tests.hostname" value="127.0.0.1" force="true"/>
-        <env name="database.tests.database" value="ospos" force="true"/>
+        <!-- Database configuration for testing.
+             Uses a SEPARATE `ospos_test` database (auto-created by
+             docker/mariadb/init or via the one-liner in docs/testing.md)
+             so DatabaseTestTrait's refresh=true can drop+rebuild without
+             touching the dev `ospos` data, and so legacy SQL-script
+             migrations that don't have a clean down() don't collide
+             with an already-populated schema.
+
+             Hostname `mysql` is the docker-compose service name —
+             tests are intended to run via:
+                 docker compose exec -T ospos composer test
+             so the test process shares the container's network namespace
+             and reaches the MariaDB service. -->
+        <env name="database.tests.hostname" value="mysql" force="true"/>
+        <env name="database.tests.database" value="ospos_test" force="true"/>
         <env name="database.tests.username" value="admin" force="true"/>
         <env name="database.tests.password" value="pointofsale" force="true"/>
         <env name="database.tests.DBDriver" value="MySQLi" force="true"/>
         <env name="database.tests.DBPrefix" value="ospos_" force="true"/>
-        <env name="MYSQL_HOST_NAME" value="127.0.0.1" force="true"/>
+        <env name="MYSQL_HOST_NAME" value="mysql" force="true"/>
         <env name="MYSQL_USERNAME" value="admin" force="true"/>
         <env name="MYSQL_PASSWORD" value="pointofsale" force="true"/>
-        <env name="MYSQL_DB_NAME" value="ospos" force="true"/>
+        <env name="MYSQL_DB_NAME" value="ospos_test" force="true"/>
     </php>
 </phpunit>

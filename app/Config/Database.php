@@ -54,14 +54,29 @@ class Database extends Config
     /**
      * This database connection is used when running PHPUnit database tests.
      *
+     * Uses a SEPARATE `ospos_test` database so DatabaseTestTrait's refresh
+     * + migrate flow can drop+rebuild without touching dev data, and so
+     * legacy SQL-script migrations that don't have a clean down() don't
+     * collide with the already-populated dev schema.
+     *
+     * Hostname `mysql` matches the docker-compose service name — these
+     * tests are intended to run via:
+     *     docker compose exec -T ospos composer test
+     * so the test process shares the container's network namespace.
+     *
+     * Bootstrap the test DB (one-time):
+     *     docker compose exec mysql sh -c \
+     *         'mysql -uroot -ppointofsale -e "CREATE DATABASE ospos_test;
+     *          GRANT ALL ON ospos_test.* TO admin@\"%\";"'
+     *
      * @var array<string, mixed>
      */
     public array $tests = [
         'DSN'         => '',
-        'hostname'    => 'localhost',
+        'hostname'    => 'mysql',
         'username'    => 'admin',
         'password'    => 'pointofsale',
-        'database'    => 'ospos',
+        'database'    => 'ospos_test',
         'DBDriver'    => 'MySQLi',
         'DBPrefix'    => 'ospos_',
         'pConnect'    => false,
