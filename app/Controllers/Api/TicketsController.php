@@ -66,6 +66,15 @@ class TicketsController extends BaseApiController
     private Ticket_product $products;
     private Ticket $tickets;
 
+    /**
+     * When a Bearer JWT authenticated the request via requireRedeemAccess,
+     * this holds the resolved ticket_scanner_devices row. Otherwise null.
+     * Used by the redeem flow for rate-limit keying + audit logging.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $scannerDeviceContext = null;
+
     public function initController(RequestInterface $request, ResponseInterface $response, LoggerInterface $logger)
     {
         parent::initController($request, $response, $logger);
@@ -91,8 +100,35 @@ class TicketsController extends BaseApiController
      * Permission gate for the scanner redeem endpoint. Accepts either
      * 'tickets_redeem' (scanner-only) or 'tickets' (full ticket-management).
      */
+    /**
+     * Permission gate for the scanner redeem endpoint. Accepts THREE auth modes:
+     *   - Authorization: Bearer <scanner-jwt> minted via /api/tickets/scanner-devices
+     *     (RS256 token validated by Ticket_token_lib, jti must not be revoked).
+     *     This is the "headless gate scanner" path — no session required.
+     *   - Session with 'tickets_redeem' grant (cashier with scan-only privileges)
+     *   - Session with 'tickets' grant (admin or full ticket-manager)
+     *
+     * When a Bearer token authenticates, returns null AND stashes the resolved
+     * scanner device on the controller for downstream use (rate-limit key,
+     * audit log actor, scope enforcement).
+     */
     protected function requireRedeemAccess(): ?ResponseInterface
     {
+        // Path A: Bearer JWT from a registered scanner device
+        $bearer = $this->extractBearerToken();
+        if ($bearer !== null) {
+            $device = $this->resolveScannerJwt($bearer);
+            if ($device !== null) {
+                $this->scannerDeviceContext = $device;
+
+                return null;
+            }
+            // Bearer was provided but invalid — refuse with 401 (do NOT fall
+            // through to session auth, which would mask the bad token).
+            return $this->respondError('Scanner token invalid, revoked, or expired.', 401);
+        }
+
+        // Path B: session-based auth (cashier or admin)
         if ($auth = $this->requireAuth()) {
             return $auth;
         }
@@ -112,6 +148,82 @@ class TicketsController extends BaseApiController
         }
 
         return $this->respondError("Permission 'tickets_redeem' or 'tickets' is required.", 403);
+    }
+
+    /**
+     * Reads "Authorization: Bearer <token>" off the request, returning the
+     * token portion or null. Tolerates extra whitespace.
+     */
+    private function extractBearerToken(): ?string
+    {
+        $header = trim($this->request->getHeaderLine('Authorization'));
+        if ($header === '') {
+            return null;
+        }
+        if (! preg_match('/^Bearer\s+(\S+)\s*$/i', $header, $m)) {
+            return null;
+        }
+
+        return $m[1];
+    }
+
+    /**
+     * Decodes the scanner JWT via Ticket_token_lib (RS256), then verifies
+     * the jti is still active in ticket_scanner_devices. On success, bumps
+     * last_seen_{at,ip} and returns the device row. Returns null on any
+     * failure (invalid signature, expired, missing scanner claim, jti
+     * revoked, jti not found).
+     *
+     * @return array<string, mixed>|null
+     */
+    private function resolveScannerJwt(string $token): ?array
+    {
+        try {
+            $tokenLib = service('ticket_token_lib');
+            $payload  = $tokenLib->verify($token);
+            if ($payload === null || ! is_array($payload)) {
+                return null;
+            }
+            // JWT::decode returns objects for nested claims; verify casts the
+            // top level to array but the 'scanner' value is still stdClass.
+            $rawScanner = $payload['scanner'] ?? null;
+            $scanner    = is_object($rawScanner) ? (array) $rawScanner : (is_array($rawScanner) ? $rawScanner : null);
+            $jti        = $payload['jti'] ?? null;
+            if ($scanner === null || ! is_string($jti) || $jti === '') {
+                return null;
+            }
+
+            if (! $this->db->tableExists('ticket_scanner_devices')) {
+                return null;
+            }
+            $row = $this->db->table('ticket_scanner_devices')
+                ->where('jti', $jti)
+                ->get()
+                ->getRowArray();
+            if ($row === null) {
+                return null;
+            }
+            if (! empty($row['revoked_at'])) {
+                return null;
+            }
+
+            // Side-effect: bump last-seen for ops dashboards. Best-effort —
+            // a failed UPDATE here must not refuse the redemption.
+            try {
+                $this->db->table('ticket_scanner_devices')
+                    ->where('device_id', $row['device_id'])
+                    ->update([
+                        'last_seen_at' => date('Y-m-d H:i:s'),
+                        'last_seen_ip' => substr((string) $this->request->getIPAddress(), 0, 64),
+                    ]);
+            } catch (\Throwable $e) {
+                // ignore
+            }
+
+            return $row;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     // ---------- ticket_products CRUD ----------
@@ -934,7 +1046,12 @@ class TicketsController extends BaseApiController
 
         // Rubber-duck #11: rate limit per-employee + per-IP. Failed signatures
         // are throttled more aggressively than authenticated success attempts.
+        // When auth came from a scanner JWT, key the rate limit on the device_id
+        // (negative range to avoid collision with employee ids).
         $employeeId = (int) ($this->session->get('person_id') ?? 0);
+        if ($employeeId === 0 && $this->scannerDeviceContext !== null) {
+            $employeeId = -(int) $this->scannerDeviceContext['device_id'];
+        }
         if (! $this->checkRedeemRateLimit($employeeId)) {
             return $this->respondError('Too many redemption attempts. Slow down.', 429);
         }
