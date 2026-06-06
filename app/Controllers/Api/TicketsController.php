@@ -73,11 +73,52 @@ class TicketsController extends BaseApiController
         $this->tickets  = model(Ticket::class);
     }
 
+    /**
+     * Permission gate for all admin/staff ticket endpoints. Wraps
+     * requirePermission('tickets') — admins always pass; non-admins need
+     * the 'tickets' module grant assigned via Office -> Employees.
+     *
+     * The scanner-only path (/api/tickets/redeem) uses requireRedeemAccess()
+     * instead so a venue gate scanner can be assigned the 'tickets_redeem'
+     * permission without granting full ticket-management privileges.
+     */
+    protected function requireTicketsAccess(): ?ResponseInterface
+    {
+        return $this->requirePermission('tickets');
+    }
+
+    /**
+     * Permission gate for the scanner redeem endpoint. Accepts either
+     * 'tickets_redeem' (scanner-only) or 'tickets' (full ticket-management).
+     */
+    protected function requireRedeemAccess(): ?ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        $info = $this->employee->get_logged_in_employee_info();
+        $pid  = $info->person_id ?? null;
+        if ($pid === null) {
+            $this->session->destroy();
+
+            return $this->respondError('Session expired.', 401);
+        }
+        if ($this->employee->isAdmin((int) $pid)) {
+            return null;
+        }
+        if ($this->employee->has_grant('tickets_redeem', (int) $pid)
+            || $this->employee->has_grant('tickets', (int) $pid)) {
+            return null;
+        }
+
+        return $this->respondError("Permission 'tickets_redeem' or 'tickets' is required.", 403);
+    }
+
     // ---------- ticket_products CRUD ----------
 
     public function productIndex(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -138,7 +179,7 @@ class TicketsController extends BaseApiController
 
     public function productShow(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -167,7 +208,7 @@ class TicketsController extends BaseApiController
 
     public function productCreate(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -212,7 +253,7 @@ class TicketsController extends BaseApiController
 
     public function productUpdate(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -273,7 +314,7 @@ class TicketsController extends BaseApiController
 
     public function productDelete(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -308,7 +349,7 @@ class TicketsController extends BaseApiController
 
     public function ticketIndex(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -367,7 +408,7 @@ class TicketsController extends BaseApiController
 
     public function ticketShow(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -394,7 +435,7 @@ class TicketsController extends BaseApiController
      */
     public function ticketIssue(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -620,7 +661,7 @@ class TicketsController extends BaseApiController
      */
     public function ticketRefund(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -884,7 +925,7 @@ class TicketsController extends BaseApiController
      */
     public function ticketRedeem(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireRedeemAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -935,7 +976,7 @@ class TicketsController extends BaseApiController
 
     public function ticketQr(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -1403,7 +1444,7 @@ class TicketsController extends BaseApiController
 
     private function transitionStatus(int $id, string $target, string $reasonField): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -1588,7 +1629,7 @@ class TicketsController extends BaseApiController
 
     public function sessionIndex(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1617,7 +1658,7 @@ class TicketsController extends BaseApiController
 
     public function sessionShow(int $productId, int $sessionId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1633,7 +1674,7 @@ class TicketsController extends BaseApiController
 
     public function sessionCreate(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1665,7 +1706,7 @@ class TicketsController extends BaseApiController
 
     public function sessionUpdate(int $productId, int $sessionId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1697,7 +1738,7 @@ class TicketsController extends BaseApiController
 
     public function sessionDelete(int $productId, int $sessionId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1727,7 +1768,7 @@ class TicketsController extends BaseApiController
 
     public function tierIndex(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1757,7 +1798,7 @@ class TicketsController extends BaseApiController
 
     public function tierShow(int $productId, int $tierId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1773,7 +1814,7 @@ class TicketsController extends BaseApiController
 
     public function tierCreate(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1805,7 +1846,7 @@ class TicketsController extends BaseApiController
 
     public function tierUpdate(int $productId, int $tierId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1837,7 +1878,7 @@ class TicketsController extends BaseApiController
 
     public function tierDelete(int $productId, int $tierId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -1867,7 +1908,7 @@ class TicketsController extends BaseApiController
 
     public function ticketAssign(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -2184,7 +2225,7 @@ class TicketsController extends BaseApiController
 
     public function translationIndex(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase3MigrationApplied()) {
@@ -2211,7 +2252,7 @@ class TicketsController extends BaseApiController
 
     public function translationUpsert(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase3MigrationApplied()) {
@@ -2251,7 +2292,7 @@ class TicketsController extends BaseApiController
 
     public function translationDelete(int $productId, string $locale): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase3MigrationApplied()) {
@@ -2276,7 +2317,7 @@ class TicketsController extends BaseApiController
 
     public function ticketResendDelivery(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase3MigrationApplied()) {
@@ -2762,7 +2803,7 @@ class TicketsController extends BaseApiController
 
     public function scannerDeviceIndex(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase4MigrationApplied()) {
@@ -2794,7 +2835,7 @@ class TicketsController extends BaseApiController
      */
     public function scannerDeviceCreate(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase4MigrationApplied()) {
@@ -2847,7 +2888,7 @@ class TicketsController extends BaseApiController
 
     public function scannerDeviceRevoke(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase4MigrationApplied()) {
@@ -2886,7 +2927,7 @@ class TicketsController extends BaseApiController
      */
     public function ticketDashboard(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase2MigrationApplied()) {
@@ -2979,7 +3020,7 @@ class TicketsController extends BaseApiController
      */
     public function ticketBulkIssue(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -3099,7 +3140,7 @@ class TicketsController extends BaseApiController
 
     public function promoIndex(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3124,7 +3165,7 @@ class TicketsController extends BaseApiController
 
     public function promoCreate(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3153,7 +3194,7 @@ class TicketsController extends BaseApiController
 
     public function promoUpdate(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3182,7 +3223,7 @@ class TicketsController extends BaseApiController
 
     public function promoDelete(int $id): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3206,7 +3247,7 @@ class TicketsController extends BaseApiController
      */
     public function promoValidate(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3249,7 +3290,7 @@ class TicketsController extends BaseApiController
 
     public function bundleIndex(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3278,7 +3319,7 @@ class TicketsController extends BaseApiController
 
     public function bundleCreate(int $productId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3314,7 +3355,7 @@ class TicketsController extends BaseApiController
 
     public function bundleDelete(int $productId, int $bundleId): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->phase5MigrationApplied()) {
@@ -3456,7 +3497,7 @@ class TicketsController extends BaseApiController
      */
     public function reportsTicketSales(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -3496,7 +3537,7 @@ class TicketsController extends BaseApiController
      */
     public function reportsTicketRedemptions(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {
@@ -3542,7 +3583,7 @@ class TicketsController extends BaseApiController
      */
     public function reportsTicketNoShows(): ResponseInterface
     {
-        if ($auth = $this->requireAuth()) {
+        if ($auth = $this->requireTicketsAccess()) {
             return $auth;
         }
         if (! $this->migrationApplied()) {

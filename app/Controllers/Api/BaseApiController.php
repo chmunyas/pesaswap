@@ -46,6 +46,36 @@ class BaseApiController extends BaseController
         return null;
     }
 
+    /**
+     * Returns 401 if not logged in, 403 if logged in but lacks the named
+     * permission, or null when the caller has access. Admins always pass.
+     *
+     * Use as:
+     *   if ($denied = $this->requirePermission('tickets')) return $denied;
+     */
+    protected function requirePermission(string $permission_id): ?ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        $info = $this->employee->get_logged_in_employee_info();
+        $pid  = $info->person_id ?? null;
+        if ($pid === null) {
+            // Stale session — person_id no longer maps to a real employee row
+            $this->session->destroy();
+
+            return $this->respondError('Session expired.', 401);
+        }
+        if ($this->employee->isAdmin((int) $pid)) {
+            return null;
+        }
+        if (!$this->employee->has_grant($permission_id, (int) $pid)) {
+            return $this->respondError(sprintf("Permission '%s' is required.", $permission_id), 403);
+        }
+
+        return null;
+    }
+
     protected function respondSuccess(mixed $data = null, string $message = 'OK', int $code = 200): ResponseInterface
     {
         return $this->response
