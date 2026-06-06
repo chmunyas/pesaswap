@@ -170,22 +170,20 @@ class Employees extends Persons
         }
 
         // Password has been changed OR first time password set
+        $language = $this->request->getPost('language', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+        $exploded = $language !== null && $language !== '' ? explode(':', $language) : [];
+
+        $employee_data = [
+            'username' => $this->request->getPost('username', FILTER_SANITIZE_FULL_SPECIAL_CHARS),
+        ];
         if (!empty($this->request->getPost('password')) && ENVIRONMENT != 'testing') {
-            $exploded = explode(":", $this->request->getPost('language', FILTER_SANITIZE_FULL_SPECIAL_CHARS));
-            $employee_data = [
-                'username'      => $this->request->getPost('username', FILTER_SANITIZE_FULL_SPECIAL_CHARS),
-                'password'      => password_hash($this->request->getPost('password'), PASSWORD_DEFAULT),
-                'hash_version'  => 2,
-                'language_code' => $exploded[0],
-                'language'      => $exploded[1]
-            ];
-        } else { // Password not changed
-            $exploded = explode(":", $this->request->getPost('language', FILTER_SANITIZE_FULL_SPECIAL_CHARS));
-            $employee_data = [
-                'username'      => $this->request->getPost('username', FILTER_SANITIZE_FULL_SPECIAL_CHARS),
-                'language_code' => $exploded[0],
-                'language'      => $exploded[1]
-            ];
+            $employee_data['password']     = password_hash($this->request->getPost('password'), PASSWORD_DEFAULT);
+            $employee_data['hash_version'] = 2;
+        }
+        // Only set language fields if a valid "code:name" pair was posted; preserves existing values on partial updates
+        if (count($exploded) >= 2 && $exploded[0] !== '' && $exploded[1] !== '') {
+            $employee_data['language_code'] = $exploded[0];
+            $employee_data['language']      = $exploded[1];
         }
 
         if ($this->employee->save_employee($person_data, $employee_data, $grants_array, $employee_id)) {
@@ -198,7 +196,7 @@ class Employees extends Persons
                 ]);
             } else { // Existing employee
                 $logged_in_employee_id = session()->get('person_id');
-                if ($employee_id == $logged_in_employee_id) {
+                if ($employee_id == $logged_in_employee_id && isset($employee_data['language_code'])) {
                     session()->set('language_code', $employee_data['language_code']);
                     session()->set('language', $employee_data['language']);
                 }
