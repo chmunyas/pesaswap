@@ -12,6 +12,7 @@ use CodeIgniter\Filters\InvalidChars;
 use CodeIgniter\Filters\PageCache;
 use CodeIgniter\Filters\PerformanceMetrics;
 use CodeIgniter\Filters\SecureHeaders;
+use App\Filters\CorrelationId;
 use App\Filters\EnhancedSecureHeaders;
 
 class Filters extends BaseFilters
@@ -32,6 +33,7 @@ class Filters extends BaseFilters
         'invalidchars'     => InvalidChars::class,
         'secureheaders'    => SecureHeaders::class,
         'enhancedheaders'  => EnhancedSecureHeaders::class,
+        'correlationid'    => CorrelationId::class,
         'cors'             => Cors::class,
         'forcehttps'       => ForceHTTPS::class,
         'pagecache'        => PageCache::class,
@@ -74,6 +76,7 @@ class Filters extends BaseFilters
      */
     public array $globals = [
         'before' => [
+            'correlationid',
             'honeypot',
             'csrf' => ['except' => 'login|migrate|api/*'],
             'invalidchars',
@@ -83,6 +86,7 @@ class Filters extends BaseFilters
             'honeypot',
             'secureheaders',
             'enhancedheaders',
+            'correlationid',
         ],
     ];
 
