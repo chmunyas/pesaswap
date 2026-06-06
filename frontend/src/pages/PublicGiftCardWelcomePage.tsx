@@ -53,6 +53,13 @@ export function PublicGiftCardWelcomePage() {
         const res = await api.giftcards.publicBalance(code!);
         const d = res.data as unknown as PublicLookup | undefined;
         if (cancelled || !d) return;
+        // Guard: don't play the ceremony for expired, used, or invalid
+        // cards. Falling into the friendly error state is better than
+        // celebrating something the recipient can't actually spend.
+        if (!d.valid) {
+          setError('This gift card is no longer active. It may have expired, been used, or been disabled.');
+          return;
+        }
         setLookup(d);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Lookup failed');
@@ -64,9 +71,11 @@ export function PublicGiftCardWelcomePage() {
     };
   }, [code]);
 
-  // Ceremony timer — runs once per mount. envelope → reveal at 250ms,
-  // reveal → rest at 1500ms (when the gradient settles).
+  // Ceremony timer — runs once the lookup confirms a valid card. If the
+  // load is still pending we wait; if it fails (`error` set) we never
+  // start. This avoids the chime + reveal animating over an empty card.
   useEffect(() => {
+    if (!lookup || error) return;
     const t1 = setTimeout(() => {
       setStage('reveal');
       // Best-effort audio. Modern Safari requires a user gesture so this
@@ -82,7 +91,7 @@ export function PublicGiftCardWelcomePage() {
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, []);
+  }, [lookup, error]);
 
   if (error) {
     return (
@@ -175,7 +184,7 @@ export function PublicGiftCardWelcomePage() {
             {/* Keep-it CTA — only enabled at rest so the user can't blast
                 through the ceremony. */}
             <Link
-              to={`/giftcard/${code}`}
+              to={`/g/${code}`}
               className={`mt-6 flex items-center justify-center gap-2 rounded-full bg-gray-900 px-6 py-4 text-base font-bold text-white shadow-lg transition-all dark:bg-white dark:text-gray-900 ${
                 stage === 'rest' ? 'opacity-100' : 'pointer-events-none opacity-30'
               }`}

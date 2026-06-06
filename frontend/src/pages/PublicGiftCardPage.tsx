@@ -79,6 +79,16 @@ export function PublicGiftCardPage() {
   // their phone.
   const [showFullQR, setShowFullQR] = useState(false);
 
+  // Escape closes the full-screen QR overlay (keyboard accessibility).
+  useEffect(() => {
+    if (!showFullQR) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setShowFullQR(false);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showFullQR]);
+
   async function load() {
     if (!code) return;
     setLoading(true);

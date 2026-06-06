@@ -433,9 +433,21 @@ export function GiftCardsPage() {
       showToast('Enter a positive amount', 'error');
       return;
     }
-    const phoneNormalized = createForm.recipient_phone.replace(/\s+/g, '').trim();
-    if (createForm.bind_on_issue && phoneNormalized && phoneNormalized.length < 7) {
-      showToast('Enter a valid phone number to link the card', 'error');
+    // Aggressive normalisation: strip whitespace, dashes, dots, parens —
+    // anything a human might paste in. Keep the leading + for E.164.
+    // Then require 9–15 digits after the optional +, matching ITU-T E.164.
+    const phoneNormalized = createForm.recipient_phone
+      .replace(/[\s().\-_]/g, '')
+      .trim();
+    const phoneOk = /^\+?\d{9,15}$/.test(phoneNormalized);
+    if (createForm.bind_on_issue && createForm.recipient_phone.trim() !== '' && !phoneOk) {
+      showToast('Enter a valid phone number (9–15 digits, optional +)', 'error');
+      return;
+    }
+    // If "Link this card" is on but no phone was provided, warn rather
+    // than silently skip — the cashier almost certainly meant to type one.
+    if (createForm.bind_on_issue && createForm.recipient_phone.trim() === '') {
+      showToast('Add a phone number or uncheck "Link this card"', 'error');
       return;
     }
     setCreating(true);
