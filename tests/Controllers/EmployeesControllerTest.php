@@ -16,10 +16,11 @@ final class EmployeesControllerTest extends CIUnitTestCase
     use DatabaseTestTrait;
     use FeatureTestTrait;
 
-    protected $migrate     = true;
-    protected $migrateOnce = true;
-    protected $refresh     = false;
+    protected $migrate         = true;
+    protected $migrateOnce     = true;
+    protected $refresh         = false;
     protected $namespace;
+    protected $useTransactions = false;
 
     protected function setUp(): void
     {
@@ -28,15 +29,16 @@ final class EmployeesControllerTest extends CIUnitTestCase
 
     protected function createNonAdminEmployee(): int
     {
+        $unique     = uniqid('', true);
         $personData = [
             'first_name'   => 'NonAdmin',
             'last_name'    => 'User',
-            'email'        => 'nonadmin@test.com',
+            'email'        => 'nonadmin+' . $unique . '@test.com',
             'phone_number' => '555-1234',
         ];
 
         $employeeData = [
-            'username'      => 'nonadmin',
+            'username'      => 'nonadmin_' . $unique,
             'password'      => password_hash('password123', PASSWORD_DEFAULT),
             'hash_version'  => 2,
             'language_code' => 'en',
@@ -51,7 +53,8 @@ final class EmployeesControllerTest extends CIUnitTestCase
         $employeeModel = model(Employee::class);
         $employeeModel->save_employee($personData, $employeeData, $grantsData, NEW_ENTRY);
 
-        return $employeeModel->get_found_rows('');
+        // Person::save_value populates person_data['person_id'] with the freshly-inserted id
+        return (int) ($personData['person_id'] ?? 0);
     }
 
     protected function loginAsAdmin(): void

@@ -22,10 +22,11 @@ final class HomeTest extends CIUnitTestCase
     use DatabaseTestTrait;
     use FeatureTestTrait;
 
-    protected $migrate     = true;
-    protected $migrateOnce = true;
-    protected $refresh     = false;
+    protected $migrate         = true;
+    protected $migrateOnce     = true;
+    protected $refresh         = false;
     protected $namespace;
+    protected $useTransactions = false;
 
     /**
      * Set up test environment
@@ -236,15 +237,16 @@ final class HomeTest extends CIUnitTestCase
      */
     protected function createNonAdminEmployee(array $overrides = []): int
     {
+        $unique     = uniqid('', true);
         $personData = [
             'first_name'   => $overrides['first_name'] ?? 'NonAdmin',
             'last_name'    => $overrides['last_name'] ?? 'User',
-            'email'        => $overrides['email'] ?? 'nonadmin@test.com',
+            'email'        => $overrides['email'] ?? 'nonadmin+' . $unique . '@test.com',
             'phone_number' => $overrides['phone_number'] ?? '555-1234',
         ];
 
         $employeeData = [
-            'username'      => $overrides['username'] ?? 'nonadmin',
+            'username'      => $overrides['username'] ?? 'nonadmin_' . $unique,
             'password'      => password_hash($overrides['password'] ?? 'password123', PASSWORD_DEFAULT),
             'hash_version'  => 2,
             'language_code' => 'en',
@@ -259,7 +261,8 @@ final class HomeTest extends CIUnitTestCase
         $employeeModel = model(Employee::class);
         $employeeModel->save_employee($personData, $employeeData, $grantsData, NEW_ENTRY);
 
-        return $employeeModel->get_found_rows('');
+        // Person::save_value populates person_data['person_id'] with the freshly-inserted id
+        return (int) $personData['person_id'];
     }
 
     /**
