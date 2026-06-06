@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS ospos_admin_audit_log (
+  audit_id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+  entity_type VARCHAR(64) NOT NULL,
+  entity_id INT(10) NULL,
+  action VARCHAR(48) NOT NULL,
+  actor_employee_id INT(10) NULL,
+  actor_scanner_device_id INT(10) NULL,
+  before_json LONGTEXT NULL,
+  after_json LONGTEXT NULL,
+  metadata_json LONGTEXT NULL,
+  ip VARCHAR(64) NULL,
+  user_agent VARCHAR(255) NULL,
+  request_id VARCHAR(64) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (audit_id),
+  KEY idx_audit_entity (entity_type, entity_id, created_at),
+  KEY idx_audit_actor (actor_employee_id, created_at),
+  KEY idx_audit_scanner (actor_scanner_device_id, created_at),
+  KEY idx_audit_action_time (action, created_at),
+  KEY idx_audit_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

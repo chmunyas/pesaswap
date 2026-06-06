@@ -351,6 +351,8 @@ class TicketsController extends BaseApiController
             }
             $fresh = $this->loadProductRow($newId);
 
+            $this->auditLog('ticket_product', $newId, 'create', null, $fresh);
+
             return $this->respondSuccess([
                 'product'   => $fresh ? $this->decorateProduct($fresh) : null,
                 'subtype'   => $this->loadSubtypeRow((string) $row['subtype'], $newId),
@@ -412,6 +414,8 @@ class TicketsController extends BaseApiController
             }
             $fresh = $this->loadProductRow($id);
 
+            $this->auditLog('ticket_product', $id, 'update', $existing, $fresh);
+
             return $this->respondSuccess([
                 'product'   => $fresh ? $this->decorateProduct($fresh) : null,
                 'subtype'   => $this->loadSubtypeRow((string) $existing['subtype'], $id),
@@ -448,6 +452,8 @@ class TicketsController extends BaseApiController
             $msg = $issued > 0
                 ? "Product archived (still readable for {$issued} issued tickets)."
                 : 'Product deleted.';
+
+            $this->auditLog('ticket_product', $id, $issued > 0 ? 'archive' : 'delete', $existing, null, ['quantity_issued' => $issued]);
 
             return $this->respondSuccess(['ticket_product_id' => $id, 'quantity_issued' => $issued], $msg);
         } catch (Throwable $e) {
@@ -725,6 +731,12 @@ class TicketsController extends BaseApiController
 
             $fresh = $this->loadTicketRow((int) $result['ticket']->ticket_id);
 
+            $this->auditLog('ticket', (int) $result['ticket']->ticket_id, 'issue', null, $fresh, [
+                'reason'         => isset($body['reason']) ? (string) $body['reason'] : 'manual',
+                'deliver_email'  => $deliveryEmail !== '' ? $deliveryEmail : null,
+                'deliver_phone'  => $deliveryPhone !== '' ? $deliveryPhone : null,
+            ]);
+
             return $this->respondSuccess([
                 'ticket'         => $fresh ? $this->decorateTicket($fresh) : null,
                 'token'          => $result['token'],
@@ -840,6 +852,17 @@ class TicketsController extends BaseApiController
             }
 
             $fresh = $this->loadTicketRow($id);
+
+            $this->auditLog('ticket', $id, 'refund', null, $fresh, [
+                'refund_amount'    => $refundAmount,
+                'reason'           => $reason,
+                'tender_count'     => count($reversedRows),
+                'reversed_tenders' => array_map(static fn ($r) => [
+                    'payment_type' => $r['payment_type'] ?? null,
+                    'amount'       => $r['amount'] ?? null,
+                    'txn_status'   => $r['txn_status'] ?? null,
+                ], $reversedRows),
+            ]);
 
             return $this->respondSuccess([
                 'ticket'           => $fresh ? $this->decorateTicket($fresh) : null,
@@ -1602,6 +1625,11 @@ class TicketsController extends BaseApiController
             $this->db->transComplete();
 
             $fresh = $this->loadTicketRow($id);
+
+            $this->auditLog('ticket', $id, $target, $row, $fresh, [
+                'from_status' => $current,
+                'reason'      => $reason,
+            ]);
 
             return $this->respondSuccess([
                 'ticket' => $fresh ? $this->decorateTicket($fresh) : null,
@@ -2991,6 +3019,12 @@ class TicketsController extends BaseApiController
 
             $row = $this->db->table('ticket_scanner_devices')->where('device_id', $deviceId)->get()->getRowArray();
 
+            $this->auditLog('scanner_device', $deviceId, 'create', null, $row, [
+                'ttl_days'    => $ttlDays,
+                'location_ct' => count($locationIds),
+                'product_ct'  => count($productIds),
+            ]);
+
             return $this->respondSuccess([
                 'device' => $this->decorateDevice($row),
                 'token'  => $token,
@@ -3028,6 +3062,9 @@ class TicketsController extends BaseApiController
                 'revoked_at'     => date('Y-m-d H:i:s'),
                 'revoked_reason' => $reason !== '' ? $reason : 'Manual revocation',
             ]);
+
+            $fresh = $this->db->table('ticket_scanner_devices')->where('device_id', $id)->get()->getRowArray();
+            $this->auditLog('scanner_device', $id, 'revoke', $existing, $fresh, ['reason' => $reason]);
 
             return $this->respondSuccess(['device_id' => $id], 'Scanner device revoked.');
         } catch (Throwable $e) {
@@ -3869,6 +3906,70 @@ class TicketsController extends BaseApiController
     // ========================================================================
 
     /**
+     * Read-side endpoint for the admin audit log: GET /api/admin/audit-log
+     * with optional filters ?entity_type=, ?entity_id=, ?actor_employee_id=,
+     * ?since=ISO, ?until=ISO, ?limit=N (1..500, default 100).
+     *
+     * Requires the 'tickets' permission. Returns entries newest-first, with
+     * before/after JSON decoded for client convenience.
+     */
+    public function auditLogIndex(): ResponseInterface
+    {
+        if ($auth = $this->requireTicketsAccess()) {
+            return $auth;
+        }
+        if (! $this->db->tableExists('admin_audit_log')) {
+            return $this->respondError('Audit log migration is required.', 503);
+        }
+
+        $q     = $this->request;
+        $limit = max(1, min(500, (int) ($q->getGet('limit') ?? 100)));
+
+        try {
+            $builder = $this->db->table('admin_audit_log')->orderBy('audit_id', 'DESC')->limit($limit);
+            $entityType = trim((string) $q->getGet('entity_type'));
+            if ($entityType !== '') {
+                $builder->where('entity_type', mb_substr($entityType, 0, 64));
+            }
+            if (($entityId = (int) $q->getGet('entity_id')) > 0) {
+                $builder->where('entity_id', $entityId);
+            }
+            if (($actorId = (int) $q->getGet('actor_employee_id')) > 0) {
+                $builder->where('actor_employee_id', $actorId);
+            }
+            $since = trim((string) $q->getGet('since'));
+            $until = trim((string) $q->getGet('until'));
+            if ($since !== '' && ($ts = strtotime($since)) !== false) {
+                $builder->where('created_at >=', date('Y-m-d H:i:s', $ts));
+            }
+            if ($until !== '' && ($ts = strtotime($until)) !== false) {
+                $builder->where('created_at <=', date('Y-m-d H:i:s', $ts));
+            }
+
+            $rows = array_map(static function (array $row): array {
+                foreach (['before_json', 'after_json', 'metadata_json'] as $col) {
+                    if (! empty($row[$col]) && is_string($row[$col])) {
+                        $decoded   = json_decode($row[$col], true);
+                        $row[$col] = is_array($decoded) ? $decoded : null;
+                    }
+                }
+
+                return $row;
+            }, $builder->get()->getResultArray());
+
+            return $this->respondSuccess(['entries' => $rows, 'count' => count($rows)]);
+        } catch (Throwable $e) {
+            log_message('error', 'TicketsController::auditLogIndex — ' . $e->getMessage());
+
+            return $this->respondError('Failed to load audit log.', 500);
+        }
+    }
+
+    // ========================================================================
+    // Cron cleanup — called from app/Commands/TicketsCleanup.php
+    // ========================================================================
+
+    /**
      * Atomic UPDATE sweep called hourly by spark `tickets:cleanup`.
      * Returns counts of rows touched per pass. All three passes are
      * idempotent — running the same minute twice is harmless.
@@ -3942,5 +4043,85 @@ class TicketsController extends BaseApiController
         }
 
         return $summary;
+    }
+
+    // ========================================================================
+    // Admin audit log — see app/Database/Migrations/20260606150000_AddAdminAuditLog.php
+    // ========================================================================
+
+    /**
+     * Append a single row to admin_audit_log. Best-effort: a failure here
+     * (table missing, DB hiccup) is logged but never bubbles up to refuse
+     * the mutation that triggered it — losing an audit row is preferable
+     * to losing the customer transaction.
+     *
+     * Call AFTER the mutation has committed successfully. The before/after
+     * arrays should be the full row snapshots (sanitised: drop signing keys,
+     * password hashes, etc. before passing). Use null for create (no before)
+     * or delete (no after).
+     *
+     * @param array<string, mixed>|null $before
+     * @param array<string, mixed>|null $after
+     * @param array<string, mixed>|null $metadata Extra context (e.g. refund amount)
+     */
+    protected function auditLog(
+        string $entityType,
+        ?int $entityId,
+        string $action,
+        ?array $before = null,
+        ?array $after = null,
+        ?array $metadata = null,
+    ): void {
+        try {
+            if (! $this->db->tableExists('admin_audit_log')) {
+                return;
+            }
+
+            $actorEmployeeId = (int) ($this->session->get('person_id') ?? 0) ?: null;
+            $actorDeviceId   = $this->scannerDeviceContext !== null
+                ? (int) $this->scannerDeviceContext['device_id']
+                : null;
+
+            $requestId = $GLOBALS['__ospos_rid'] ?? null;
+            $requestId = is_string($requestId) ? substr($requestId, 0, 64) : null;
+
+            $this->db->table('admin_audit_log')->insert([
+                'entity_type'             => substr($entityType, 0, 64),
+                'entity_id'               => $entityId,
+                'action'                  => substr($action, 0, 48),
+                'actor_employee_id'       => $actorEmployeeId,
+                'actor_scanner_device_id' => $actorDeviceId,
+                'before_json'             => $before === null ? null : json_encode($this->sanitiseAuditRow($before), JSON_UNESCAPED_SLASHES),
+                'after_json'              => $after === null ? null : json_encode($this->sanitiseAuditRow($after), JSON_UNESCAPED_SLASHES),
+                'metadata_json'           => $metadata === null ? null : json_encode($metadata, JSON_UNESCAPED_SLASHES),
+                'ip'                      => substr((string) $this->request->getIPAddress(), 0, 64),
+                'user_agent'              => substr((string) $this->request->getUserAgent(), 0, 255),
+                'request_id'              => $requestId,
+            ]);
+        } catch (\Throwable $e) {
+            log_message('warning', 'auditLog failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Strips fields that must never reach the audit log (private signing key
+     * material, password hashes, secret tokens). Whitelist approach inverted:
+     * remove known-sensitive keys, leave the rest.
+     *
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function sanitiseAuditRow(array $row): array
+    {
+        unset(
+            $row['private_key_pem'],
+            $row['password'],
+            $row['password_hash'],
+            $row['signing_key_pem'],
+            $row['verification_token_hash'],
+            $row['hold_token'],
+        );
+
+        return $row;
     }
 }
