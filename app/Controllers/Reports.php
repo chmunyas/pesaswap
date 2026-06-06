@@ -25,6 +25,7 @@ use App\Models\Reports\Summary_sales;
 use App\Models\Reports\Summary_sales_taxes;
 use App\Models\Reports\Summary_suppliers;
 use App\Models\Reports\Summary_taxes;
+use CodeIgniter\HTTP\Exceptions\RedirectException;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\OSPOS;
 use Config\Services;
@@ -83,10 +84,19 @@ class Reports extends Secure_Controller
             preg_match('/^(.*?)([sy])?$/', array_pop($matches), $matches);
             $submodule_id = $matches[1] . ((count($matches) > 2) ? $matches[2] : 's');
 
-            // Check access to report submodule
-            if (!$this->employee->has_grant('reports_' . $submodule_id, $this->employee->get_logged_in_employee_info()->person_id)) {
-                header('Location: ' . base_url('no_access/reports/reports_' . $submodule_id));
-                exit();
+            // Check access to report submodule. Admins always pass — without
+            // this branch even the seeded admin user gets blocked from a
+            // report unless the admin row carries every reports_* grant
+            // (which the migration doesn't guarantee). Also: replaced the
+            // legacy header()+exit() with RedirectException so PHPUnit
+            // FeatureTestTrait sees the redirect cleanly (matches the
+            // Secure_Controller pattern from ent-emp-getview-redirect).
+            $current_user_id = (int) ($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+            if ($current_user_id > 0
+                && ! $this->employee->isAdmin($current_user_id)
+                && ! $this->employee->has_grant('reports_' . $submodule_id, $current_user_id)
+            ) {
+                throw new RedirectException(base_url('no_access/reports/reports_' . $submodule_id));
             }
         }
 
