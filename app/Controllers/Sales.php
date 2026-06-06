@@ -423,6 +423,17 @@ class Sales extends Secure_Controller
 
                 if (isset($cur_giftcard_customer) && $cur_giftcard_customer != $customer_id && $cur_giftcard_customer != null) {
                     $data['error'] = lang('Giftcards.cannot_use', [$giftcard_num]);
+                } elseif ($giftcard->is_bound_card($giftcard_num)) {
+                    // Phase 6 security guard: bound cards require PIN auth via
+                    // the modern payment-intent flow. Refuse the legacy POS
+                    // path so a thief with the raw code cannot drain a
+                    // linked card without the customer's PIN.
+                    $data['error'] = sprintf(
+                        'Gift card %s is linked to a phone and requires PIN authorisation. '
+                        . 'Use the new payment flow at /giftcards/tender-demo (or POST '
+                        . '/api/giftcards/:id/payment-intent) instead.',
+                        $giftcard_num,
+                    );
                 } elseif (($cur_giftcard_value - $current_payments_with_giftcard) <= 0 && $this->sale_lib->get_mode() === 'sale') {
                     $data['error'] = lang('Giftcards.remaining_balance', [$giftcard_num, $cur_giftcard_value]);
                 } else {

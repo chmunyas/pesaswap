@@ -302,13 +302,85 @@ class Giftcard extends Model
     }
 
     /**
-     * Updates gift card value
+     * Updates gift card value.
+     *
+     * SECURITY GUARD (Phase 6, see app/Database/Migrations/sqlscripts/
+     * 3.4.9_giftcard_bindings_and_intents.sql): if a card has an active
+     * phone binding, raw-code redemption via this legacy method is refused.
+     * Bound cards MUST go through the modern intent flow at
+     * /api/giftcards/:id/payment-intent so the customer's PIN authorises
+     * each debit. The guard only fires when value is REDUCED — refunds and
+     * top-ups (where the new value is greater than the current) stay
+     * permitted so existing back-office flows aren't broken.
      */
     public function update_giftcard_value(string $giftcard_number, float $value): void    // TODO: Should we return the value of update like other similar functions do?
     {
+        // Snapshot the current value first so we can compute the delta and
+        // decide whether to apply the guard. We deliberately do not lock
+        // the row here — concurrent writes are still possible via the API
+        // path, but a parallel bind cannot squeeze in because a card's
+        // status flips to 'active' atomically via the generated-column
+        // unique index on ospos_giftcard_bindings.active_card.
+        $current = $this->db->table('giftcards')
+            ->where('giftcard_number', $giftcard_number)
+            ->get()
+            ->getRowArray();
+        if ($current !== null && (float) $current['value'] > $value) {
+            $this->guardBoundCardLegacyRedemption((int) $current['giftcard_id'], $giftcard_number);
+        }
+
         $builder = $this->db->table('giftcards');
         $builder->where('giftcard_number', $giftcard_number);
         $builder->update(['value' => $value]);
+    }
+
+    /**
+     * Returns true if the card has an active phone binding (Phase 6).
+     * Used by both the legacy redemption guard and the Sales controller's
+     * cashier-facing error surfacing.
+     */
+    public function is_bound_card(string $giftcard_number): bool
+    {
+        if (!$this->db->tableExists('giftcard_bindings')) {
+            return false;
+        }
+        $id = $this->get_giftcard_id($giftcard_number);
+        if ($id === false) {
+            return false;
+        }
+        $count = $this->db->table('giftcard_bindings')
+            ->where('giftcard_id', $id)
+            ->where('status', 'active')
+            ->where('deleted', 0)
+            ->countAllResults();
+
+        return $count > 0;
+    }
+
+    private function guardBoundCardLegacyRedemption(int $giftcard_id, string $giftcard_number): void
+    {
+        if (!$this->db->tableExists('giftcard_bindings')) {
+            // Pre-Phase 6 schema — no bindings table, no guard to enforce.
+            return;
+        }
+        $hasActiveBinding = $this->db->table('giftcard_bindings')
+            ->where('giftcard_id', $giftcard_id)
+            ->where('status', 'active')
+            ->where('deleted', 0)
+            ->countAllResults() > 0;
+        if (!$hasActiveBinding) {
+            return;
+        }
+
+        throw new \RuntimeException(
+            sprintf(
+                'Gift card %s is linked to a phone and cannot be redeemed by raw code. '
+                . 'Create a payment intent first via POST /api/giftcards/%d/payment-intent '
+                . '(card_balance source) so the customer authorises the debit with their PIN.',
+                $giftcard_number,
+                $giftcard_id,
+            ),
+        );
     }
 
     /**
