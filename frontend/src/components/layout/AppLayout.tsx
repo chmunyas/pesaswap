@@ -3,7 +3,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useTheme } from '../../hooks/useTheme';
 import { MobileBottomNav } from './MobileBottomNav';
 import { useI18n, LOCALE_LABELS, type Locale } from '../../lib/i18n';
-import { Activity, Banknote, ChefHat, Coffee, Coins, FileText, Languages, Calendar, Globe2, Palette, ScanLine, Smartphone, Tag, Ticket } from 'lucide-react';
+import { Activity, ChefHat, Coffee, FileText, Languages, Calendar, Globe2, ScanLine, Smartphone, Tag, Ticket } from 'lucide-react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -38,9 +38,9 @@ const navItems = [
   { to: '/suppliers', icon: Truck, label: 'Suppliers', group: 'main' },
   { to: '/receivings', icon: ClipboardList, label: 'Receivings', group: 'main' },
   { to: '/giftcards', icon: CreditCard, label: 'Gift Cards', group: 'main' },
-  { to: '/giftcards/designs', icon: Palette, label: 'Gift Card Designs', group: 'office' },
-  { to: '/giftcards/denominations', icon: Coins, label: 'Gift Card Denominations', group: 'office' },
-  { to: '/giftcards/tender-demo', icon: Banknote, label: 'Gift Card Tender Demo', group: 'office' },
+  // Designs / Denominations / Tender Demo previously cluttered the office
+  // group. They live behind a small ⚙ link inside the GiftCardsPage header
+  // now ("config lives with the thing it configures"). Routes still wired.
   { to: '/tickets', icon: Ticket, label: 'Ticketing', group: 'main' },
   { to: '/tickets/dashboard', icon: Activity, label: 'Gate Dashboard', group: 'main' },
   { to: '/tickets/promos', icon: Tag, label: 'Ticket Promos', group: 'main' },

@@ -529,6 +529,23 @@ export function GiftCardsPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Sell, top-up, redeem and audit gift cards. Pay via M-Pesa, Airtel Money, MTN MoMo, cash, card or bank.
           </p>
+          {/* Configuration lives with the thing being configured. Three
+              small links replace the old top-level nav entries; clutter
+              stays out of the sidebar for the cashier who only ever
+              touches the main page. */}
+          <nav className="mt-2 flex flex-wrap items-center gap-3 text-[11px]" aria-label="Gift card settings">
+            <a href="/giftcards/designs" className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
+              <Palette className="h-3 w-3" /> Designs
+            </a>
+            <span className="text-gray-300 dark:text-gray-700">·</span>
+            <a href="/giftcards/denominations" className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
+              <Wallet className="h-3 w-3" /> Denominations
+            </a>
+            <span className="text-gray-300 dark:text-gray-700">·</span>
+            <a href="/giftcards/tender-demo" className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
+              <CreditCard className="h-3 w-3" /> POS demo
+            </a>
+          </nav>
         </div>
         <button
           type="button"
@@ -993,28 +1010,49 @@ function GiftCardCard({ card, binding, onClick, onDelete, onTransfer, onBind }: 
           </div>
         </div>
 
-        {/* Status badges */}
+        {/* Status badges — consolidated.
+            Show the binding (most informative, always relevant when present)
+            + at most ONE "needs attention" pill picking the most urgent of
+            transfer-pending / scheduled-delivery / expired / expiring-soon.
+            Full status surfaces in the detail modal. */}
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px]">
           {binding && (
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
               <Link2 className="h-3 w-3" /> {giftcardBindingMock.mnoLabel(binding.mno_provider)} {giftcardBindingMock.maskPhone(binding.mobile_number)}
             </span>
           )}
-          {card.pending_transfer && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
-              <UserPlus className="h-3 w-3" /> Transfer pending
-            </span>
-          )}
-          {card.delivery_status === 'pending' && card.deliver_at && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-700 dark:bg-sky-900/40 dark:text-sky-200">
-              <Clock className="h-3 w-3" /> Sends {new Date(card.deliver_at).toLocaleString()}
-            </span>
-          )}
-          {card.days_to_expiry !== null && (
-            <span className={card.days_to_expiry < 0 ? 'text-rose-600' : card.days_to_expiry < 30 ? 'text-amber-600' : 'text-gray-500'}>
-              {card.days_to_expiry < 0 ? `Expired ${-card.days_to_expiry}d ago` : `Expires in ${card.days_to_expiry}d`}
-            </span>
-          )}
+          {(() => {
+            // Priority: transfer > scheduled > expired > expiring-soon.
+            if (card.pending_transfer) {
+              return (
+                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
+                  <UserPlus className="h-3 w-3" /> Transfer pending
+                </span>
+              );
+            }
+            if (card.delivery_status === 'pending' && card.deliver_at) {
+              return (
+                <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-700 dark:bg-sky-900/40 dark:text-sky-200">
+                  <Clock className="h-3 w-3" /> Sends {new Date(card.deliver_at).toLocaleDateString()}
+                </span>
+              );
+            }
+            if (card.days_to_expiry !== null && card.days_to_expiry < 0) {
+              return (
+                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 font-semibold text-rose-700 dark:bg-rose-900/40 dark:text-rose-200">
+                  <AlertTriangle className="h-3 w-3" /> Expired {-card.days_to_expiry}d ago
+                </span>
+              );
+            }
+            if (card.days_to_expiry !== null && card.days_to_expiry < 30) {
+              return (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
+                  <Clock className="h-3 w-3" /> Expires in {card.days_to_expiry}d
+                </span>
+              );
+            }
+            return null;
+          })()}
         </div>
 
         <div className="mt-auto flex gap-2 pt-4">
