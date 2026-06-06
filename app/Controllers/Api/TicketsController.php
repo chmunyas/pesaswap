@@ -3987,11 +3987,11 @@ class TicketsController extends BaseApiController
                 $builder->where('created_at <=', date('Y-m-d H:i:s', $ts));
             }
 
-            $rows = array_map(static function (array $row): array {
+            $self = $this;
+            $rows = array_map(static function (array $row) use ($self): array {
                 foreach (['before_json', 'after_json', 'metadata_json'] as $col) {
                     if (! empty($row[$col]) && is_string($row[$col])) {
-                        $decoded   = json_decode($row[$col], true);
-                        $row[$col] = is_array($decoded) ? $decoded : null;
+                        $row[$col] = $self->decodeAuditPayload($row[$col]);
                     }
                 }
 
@@ -4132,9 +4132,9 @@ class TicketsController extends BaseApiController
                 'action'                  => substr($action, 0, 48),
                 'actor_employee_id'       => $actorEmployeeId,
                 'actor_scanner_device_id' => $actorDeviceId,
-                'before_json'             => $before === null ? null : json_encode($this->sanitiseAuditRow($before), JSON_UNESCAPED_SLASHES),
-                'after_json'              => $after === null ? null : json_encode($this->sanitiseAuditRow($after), JSON_UNESCAPED_SLASHES),
-                'metadata_json'           => $metadata === null ? null : json_encode($metadata, JSON_UNESCAPED_SLASHES),
+                'before_json'             => $this->encodeAuditPayload($before === null ? null : $this->sanitiseAuditRow($before)),
+                'after_json'              => $this->encodeAuditPayload($after === null ? null : $this->sanitiseAuditRow($after)),
+                'metadata_json'           => $this->encodeAuditPayload($metadata),
                 'ip'                      => substr((string) $this->request->getIPAddress(), 0, 64),
                 'user_agent'              => substr((string) $this->request->getUserAgent(), 0, 255),
                 'request_id'              => $requestId,
@@ -4142,6 +4142,74 @@ class TicketsController extends BaseApiController
         } catch (\Throwable $e) {
             log_message('warning', 'auditLog failed: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * JSON-encode + (optionally) encrypt the audit payload.
+     *
+     * If Pii_crypto reports a configured master key, the JSON is wrapped
+     * in an AES-256-GCM envelope (v01.iv.ct.tag) and stored ciphertext.
+     * Without a key (e.g. fresh install), falls through to plaintext JSON
+     * — preserving backward compatibility with installations that haven't
+     * set PII_MASTER_KEY yet.
+     *
+     * The envelope is self-identifying via its 'v01.' prefix, so the
+     * read-side (decodeAuditPayload) can route per-row without a schema
+     * column.
+     */
+    private function encodeAuditPayload(?array $payload): ?string
+    {
+        if ($payload === null) {
+            return null;
+        }
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            return null;
+        }
+        try {
+            $crypto = service('pii_crypto');
+            if ($crypto->isConfigured()) {
+                return $crypto->encrypt($json);
+            }
+        } catch (\Throwable $e) {
+            // Vault errors are non-fatal here — fall back to plaintext
+            // rather than lose the audit row entirely.
+            log_message('warning', 'auditLog encrypt fallback to plaintext: ' . $e->getMessage());
+        }
+
+        return $json;
+    }
+
+    /**
+     * Reverse of encodeAuditPayload — accepts either a 'v01.' envelope
+     * (try decrypt then json_decode) or a plaintext JSON string (legacy
+     * pre-encryption rows, or rows written when no PII master key was
+     * configured). Returns the decoded array, or null on any parse or
+     * decrypt failure.
+     */
+    protected function decodeAuditPayload(?string $stored): ?array
+    {
+        if ($stored === null || $stored === '') {
+            return null;
+        }
+        // Envelope marker — try decrypt first
+        if (str_starts_with($stored, 'v01.')) {
+            try {
+                $plain = service('pii_crypto')->decrypt($stored);
+                if ($plain === null) {
+                    return null;
+                }
+                $decoded = json_decode($plain, true);
+
+                return is_array($decoded) ? $decoded : null;
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
+        // Legacy plaintext JSON
+        $decoded = json_decode($stored, true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 
     /**
