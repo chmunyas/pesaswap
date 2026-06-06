@@ -220,12 +220,9 @@ class Google_wallet_lib
 
     private function loadCredentials(): array
     {
-        $db        = db_connect();
-        $jsonRow   = $db->table('app_config')->where('key', 'ticket_google_service_account_json')->get()->getRowArray();
-        $issuerRow = $db->table('app_config')->where('key', 'ticket_google_issuer_id')->get()->getRowArray();
-
-        $json     = $jsonRow !== null ? (string) $jsonRow['value'] : '';
-        $issuerId = $issuerRow !== null ? trim((string) $issuerRow['value']) : '';
+        $vault    = service('secrets_vault');
+        $json     = $vault->get('ticket_google_service_account_json');
+        $issuerId = trim($vault->get('ticket_google_issuer_id'));
 
         if ($json === '' || $issuerId === '') {
             throw new RuntimeException('Google Wallet is not configured. Set ticket_google_service_account_json and ticket_google_issuer_id.');

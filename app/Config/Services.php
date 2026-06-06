@@ -6,6 +6,7 @@ use App\Libraries\Apple_pkpass_lib;
 use App\Libraries\Google_wallet_lib;
 use App\Libraries\MY_Language;
 use App\Libraries\Qr_lib;
+use App\Libraries\Secrets_vault;
 use App\Libraries\Ticket_delivery_lib;
 use App\Libraries\Ticket_issuer;
 use App\Libraries\Ticket_token_lib;
@@ -138,6 +139,21 @@ class Services extends BaseService
         }
 
         return new Google_wallet_lib();
+    }
+
+    /**
+     * Resolves logical secret names to values via env > *_FILE > app_config
+     * fallthrough. Centralises wallet credentials, signing keys, MNO API
+     * secrets so they can be sourced from Docker/k8s secret mounts rather
+     * than plaintext app_config rows (ent-secrets-vault).
+     */
+    public static function secrets_vault(bool $getShared = true): Secrets_vault
+    {
+        if ($getShared) {
+            return static::getSharedInstance('secrets_vault');
+        }
+
+        return new Secrets_vault();
     }
 
     /**

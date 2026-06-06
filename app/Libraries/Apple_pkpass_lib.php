@@ -242,20 +242,14 @@ class Apple_pkpass_lib
      */
     private function loadCredentials(): array
     {
-        $db = db_connect();
+        $vault = service('secrets_vault');
 
-        $get = static function (string $key) use ($db): string {
-            $row = $db->table('app_config')->where('key', $key)->get()->getRowArray();
-
-            return $row !== null ? (string) $row['value'] : '';
-        };
-
-        $cert       = $get('ticket_apple_pass_cert_pem');
-        $key        = $get('ticket_apple_pass_key_pem');
-        $keyPwd     = $get('ticket_apple_pass_key_password');
-        $wwdr       = $get('ticket_apple_wwdr_cert_pem');
-        $passTypeId = $get('ticket_apple_pass_type_id');
-        $teamId     = $get('ticket_apple_team_id');
+        $cert       = $vault->get('ticket_apple_pass_cert_pem');
+        $key        = $vault->get('ticket_apple_pass_key_pem');
+        $keyPwd     = $vault->get('ticket_apple_pass_key_password');
+        $wwdr       = $vault->get('ticket_apple_wwdr_cert_pem');
+        $passTypeId = $vault->get('ticket_apple_pass_type_id');
+        $teamId     = $vault->get('ticket_apple_team_id');
 
         if ($cert === '' || $key === '' || $wwdr === '' || $passTypeId === '' || $teamId === '') {
             throw new RuntimeException(
