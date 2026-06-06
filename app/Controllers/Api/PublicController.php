@@ -213,6 +213,22 @@ class PublicController extends BaseApiController
         return $this->delegateToGiftcards('publicTransferConfirm', $code);
     }
 
+    /**
+     * Gift Drops (Slice E.4).
+     *
+     * GET  /api/public/giftcards/drop/:token        — view drop (sanitised).
+     * POST /api/public/giftcards/drop/:token/claim  — atomically claim a slot.
+     */
+    public function giftcardDropLookup(string $token): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicDropLookup', $token);
+    }
+
+    public function giftcardDropClaim(string $token): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicDropClaim', $token);
+    }
+
     private function delegateToGiftcards(string $method, string ...$args): ResponseInterface
     {
         $gc = new GiftcardsController();

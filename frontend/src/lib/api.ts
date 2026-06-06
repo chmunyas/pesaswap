@@ -82,6 +82,18 @@ const giftCardEndpoints = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  // Gift Drops (hongbao-style — Slice E.4)
+  dropCreate: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/drop`, { method: 'POST', body: JSON.stringify(data) }),
+  dropCancel: (dropId: number) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/drops/${dropId}/cancel`, { method: 'POST' }),
+  dropLookup: (token: string) =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/drop/${encodeURIComponent(token)}`),
+  dropClaim: (token: string, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/drop/${encodeURIComponent(token)}/claim`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   // Design templates + preset denominations (admin)
   designs: {
     list: () => request<ApiResponse<{ designs?: EntityPayload[] }>>('/giftcard-designs'),

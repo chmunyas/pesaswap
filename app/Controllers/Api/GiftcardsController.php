@@ -3136,6 +3136,461 @@ class GiftcardsController extends BaseApiController
         }
     }
 
+    // ========================================================================
+    // GIFT DROPS (hongbao-style — Slice E.4)
+    //
+    // A drop lets a sender hand out N slices of one card to N recipients via
+    // a single shareable memorable-phrase URL. First N people to claim each
+    // get a fresh gift card carrying their slice's amount (equal split or
+    // random distribution).
+    // ========================================================================
+
+    private const ACTION_DROP_CREATED = 'drop_created';
+    private const ACTION_DROP_CLAIMED = 'drop_claimed';
+    private const ACTION_DROP_REFUNDED = 'drop_refunded';
+
+    /**
+     * Authenticated: create a Gift Drop on top of an existing card.
+     *
+     * POST /api/giftcards/:id/drop
+     *   { slot_count, distribution: 'equal'|'random', total_amount?, message?, expires_in_hours? }
+     *
+     * If total_amount is omitted, the entire parent card balance is dropped.
+     * The parent card is debited atomically (FOR UPDATE) and the funds are
+     * frozen on the drop row's amount_remaining. Returns the share URL
+     * carrying a 6-word memorable phrase.
+     */
+    public function dropCreate(int $id): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) {
+            return $authResponse;
+        }
+        if (!$this->dropsApplied()) {
+            return $this->respondError('Gift Drop migration is required.', 503);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $slotCount = (int)($body['slot_count'] ?? 0);
+        $distribution = strtolower(trim((string)($body['distribution'] ?? 'equal')));
+        if (!in_array($distribution, ['equal', 'random'], true)) {
+            return $this->respondError('distribution must be equal or random.', 422);
+        }
+        $maxSlots = max(2, (int)$this->getAppConfig('giftcard_drop_max_slots', '50'));
+        if ($slotCount < 2 || $slotCount > $maxSlots) {
+            return $this->respondError("slot_count must be between 2 and {$maxSlots}.", 422);
+        }
+        $minSlice = max(0.01, (float)$this->getAppConfig('giftcard_drop_min_slice', '1.00'));
+        $message = mb_substr(trim((string)($body['message'] ?? '')), 0, 280);
+        $ttlHours = max(1, min(168, (int)($body['expires_in_hours'] ?? $this->getAppConfig('giftcard_drop_default_ttl_hours', '24'))));
+
+        try {
+            $this->db->transStart();
+            $giftcardsTable = $this->db->prefixTable('giftcards');
+            $card = $this->db->query(
+                "SELECT * FROM {$giftcardsTable} WHERE giftcard_id = ? AND deleted = 0 LIMIT 1 FOR UPDATE",
+                [$id],
+            )->getRowArray();
+            if ($card === null) {
+                $this->db->transComplete();
+                return $this->respondError('Gift card not found.', 404);
+            }
+            if ($this->computeStatus($card) !== self::STATUS_ACTIVE) {
+                $this->db->transComplete();
+                return $this->respondError('Only active gift cards can fund a drop.', 409);
+            }
+
+            $cardBalance = (float)$card['value'];
+            $totalAmount = isset($body['total_amount']) ? (float)$body['total_amount'] : $cardBalance;
+            if ($totalAmount <= 0 || $totalAmount > $cardBalance) {
+                $this->db->transComplete();
+                return $this->respondError('total_amount must be > 0 and ≤ card balance.', 422);
+            }
+            if ($totalAmount / $slotCount < $minSlice) {
+                $this->db->transComplete();
+                return $this->respondError("Each slot must be at least {$minSlice} {$card['currency']}.", 422);
+            }
+
+            // Debit the parent card. Use applyBalanceChangeLocked so the
+            // history row + status update is one statement.
+            $newBalance = number_format($cardBalance - $totalAmount, 2, '.', '');
+            $newStatus = $this->bccompZero($newBalance) <= 0 ? self::STATUS_USED : self::STATUS_ACTIVE;
+            $this->applyBalanceChangeLocked($id, $card, $newBalance, $newStatus, [
+                'action'         => self::ACTION_DROP_CREATED,
+                'amount'         => '-' . number_format($totalAmount, 2, '.', ''),
+                'comment'        => 'Funds frozen for Gift Drop (' . $slotCount . ' slots, ' . $distribution . ')',
+            ]);
+
+            $token = MemorablePhrase::generate();
+            $tokenHash = hash('sha256', $token);
+            $expires = date('Y-m-d H:i:s', time() + $ttlHours * 3600);
+
+            $this->db->table('giftcard_drops')->insert([
+                'parent_giftcard_id'  => $id,
+                'creator_employee_id' => $this->currentUserId(),
+                'total_amount'        => number_format($totalAmount, 2, '.', ''),
+                'currency'            => (string)($card['currency'] ?? 'KES'),
+                'slot_count'          => $slotCount,
+                'amount_remaining'    => number_format($totalAmount, 2, '.', ''),
+                'distribution'        => $distribution,
+                'message'             => $message !== '' ? $message : null,
+                'share_token_hash'    => $tokenHash,
+                'expires_at'          => $expires,
+                'ip'                  => $this->request->getIPAddress() ?: null,
+                'user_agent'          => mb_substr((string)$this->request->getUserAgent(), 0, 255),
+            ]);
+            $dropId = (int)$this->db->insertID();
+
+            $this->db->transComplete();
+            if (!$this->db->transStatus()) {
+                return $this->respondError('Failed to create drop.', 500);
+            }
+
+            return $this->respondSuccess([
+                'drop_id'           => $dropId,
+                'share_token'       => $token,
+                'share_url'         => '/gd/' . $token,
+                'total_amount'      => (float)$totalAmount,
+                'currency'          => (string)($card['currency'] ?? 'KES'),
+                'slot_count'        => $slotCount,
+                'distribution'      => $distribution,
+                'expires_at'        => $expires,
+                'parent_giftcard_id'=> $id,
+            ], 'Drop created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::dropCreate — ' . $e->getMessage());
+            return $this->respondError('Failed to create drop.', 500);
+        }
+    }
+
+    /**
+     * Public: view a drop (sanitised). Returns total amount, slots, sender
+     * message, and a list of past claims (claimer_name only — phones are
+     * never exposed publicly). Rate-limited 30/min/IP.
+     *
+     * GET /api/public/giftcards/drop/:token
+     */
+    public function publicDropLookup(string $token): ResponseInterface
+    {
+        if (!$this->publicTransferRateLimit('gc_drop_lookup', 30)) {
+            return $this->respondError('Too many requests.', 429);
+        }
+        if (!MemorablePhrase::looksValid($token)) {
+            return $this->respondError('Invalid drop token.', 422);
+        }
+        if (!$this->dropsApplied()) {
+            return $this->respondError('Drops not available on this merchant.', 503);
+        }
+
+        $drop = $this->db->table('giftcard_drops')
+            ->where('share_token_hash', hash('sha256', $token))
+            ->get()
+            ->getRowArray();
+        if ($drop === null) {
+            return $this->respondError('Drop not found.', 404);
+        }
+        $expired = strtotime((string)$drop['expires_at']) < time();
+        $exhausted = (int)$drop['slots_claimed'] >= (int)$drop['slot_count'];
+        $cancelled = !empty($drop['cancelled_at']);
+
+        $claims = $this->db->table('giftcard_drop_claims')
+            ->select('slot_index, claimed_amount, claimer_name, claimed_at')
+            ->where('drop_id', (int)$drop['drop_id'])
+            ->orderBy('claimed_at', 'ASC')
+            ->get()
+            ->getResultArray();
+
+        return $this->respondSuccess([
+            'drop_id'         => (int)$drop['drop_id'],
+            'total_amount'    => (float)$drop['total_amount'],
+            'amount_remaining'=> (float)$drop['amount_remaining'],
+            'currency'        => (string)$drop['currency'],
+            'slot_count'      => (int)$drop['slot_count'],
+            'slots_claimed'   => (int)$drop['slots_claimed'],
+            'distribution'    => (string)$drop['distribution'],
+            'message'         => $drop['message'] ?? null,
+            'expires_at'      => $drop['expires_at'],
+            'status'          => $cancelled ? 'cancelled' : ($expired ? 'expired' : ($exhausted ? 'exhausted' : 'active')),
+            'claims'          => array_map(function ($c) {
+                return [
+                    'slot_index'     => (int)$c['slot_index'],
+                    'claimed_amount' => (float)$c['claimed_amount'],
+                    'claimer_name'   => $c['claimer_name'] ?? null,
+                    'claimed_at'     => $c['claimed_at'],
+                ];
+            }, $claims),
+        ]);
+    }
+
+    /**
+     * Public: claim a slot on a drop. Atomically grabs the next slot
+     * (FOR UPDATE on the drop row), computes the slice via equal or
+     * random distribution, mints a fresh gift card carrying the slice,
+     * and returns its code + accept URL.
+     *
+     * POST /api/public/giftcards/drop/:token/claim
+     *   { claimer_name?, claimer_phone? }
+     *
+     * Idempotent on (drop_id, claimer_phone) when phone is provided —
+     * the same claimer can refresh / retry without double-claiming.
+     */
+    public function publicDropClaim(string $token): ResponseInterface
+    {
+        if (!MemorablePhrase::looksValid($token)) {
+            return $this->respondError('Invalid drop token.', 422);
+        }
+        $body = $this->request->getJSON(true) ?? [];
+        $claimerName = mb_substr(trim((string)($body['claimer_name'] ?? '')), 0, 120);
+        $phoneRaw = trim((string)($body['claimer_phone'] ?? ''));
+        $claimerPhone = (string)preg_replace('/[\s().\-_]/', '', $phoneRaw);
+        if ($claimerPhone !== '' && !preg_match('/^\+?\d{9,15}$/', $claimerPhone)) {
+            return $this->respondError('claimer_phone must be 9-15 digits if provided.', 422);
+        }
+        if (!$this->publicTransferRateLimit('gc_drop_claim', 30)) {
+            return $this->respondError('Too many requests.', 429);
+        }
+        if (!$this->dropsApplied()) {
+            return $this->respondError('Drops not available on this merchant.', 503);
+        }
+
+        try {
+            $this->db->transStart();
+
+            // Lock the drop row to serialize concurrent claimers.
+            $dropsTable = $this->db->prefixTable('giftcard_drops');
+            $drop = $this->db->query(
+                "SELECT * FROM {$dropsTable} WHERE share_token_hash = ? LIMIT 1 FOR UPDATE",
+                [hash('sha256', $token)],
+            )->getRowArray();
+            if ($drop === null) {
+                $this->db->transComplete();
+                return $this->respondError('Drop not found.', 404);
+            }
+            if (!empty($drop['cancelled_at'])) {
+                $this->db->transComplete();
+                return $this->respondError('Drop cancelled.', 409);
+            }
+            if (strtotime((string)$drop['expires_at']) < time()) {
+                $this->db->transComplete();
+                return $this->respondError('Drop expired.', 410);
+            }
+
+            $slotsClaimed = (int)$drop['slots_claimed'];
+            $slotCount = (int)$drop['slot_count'];
+            if ($slotsClaimed >= $slotCount) {
+                $this->db->transComplete();
+                return $this->respondError('Drop fully claimed.', 410);
+            }
+
+            // Idempotency: if this phone already claimed, return the
+            // existing claim (and its existing gift-card code).
+            if ($claimerPhone !== '') {
+                $existing = $this->db->table('giftcard_drop_claims')
+                    ->where('drop_id', (int)$drop['drop_id'])
+                    ->where('claimer_phone', $claimerPhone)
+                    ->get()
+                    ->getRowArray();
+                if ($existing !== null) {
+                    $card = $existing['claimed_giftcard_id']
+                        ? $this->db->table('giftcards')->where('giftcard_id', (int)$existing['claimed_giftcard_id'])->get()->getRowArray()
+                        : null;
+                    $this->db->transComplete();
+                    return $this->respondSuccess([
+                        'claim_id'         => (int)$existing['claim_id'],
+                        'claimed_amount'   => (float)$existing['claimed_amount'],
+                        'giftcard_number'  => $card['giftcard_number'] ?? null,
+                        'idempotent'       => true,
+                    ], 'Existing claim returned.');
+                }
+            }
+
+            // Distribute. amount_remaining and slot count drive the math.
+            $remaining = (float)$drop['amount_remaining'];
+            $slotsLeft = $slotCount - $slotsClaimed;
+            $minSlice = max(0.01, (float)$this->getAppConfig('giftcard_drop_min_slice', '1.00'));
+            $slice = $this->computeDropSlice((string)$drop['distribution'], $remaining, $slotsLeft, $minSlice);
+
+            // Mint a fresh card carrying the slice.
+            $newCode = $this->generateUniqueCode();
+            if ($newCode === null) {
+                $this->db->transComplete();
+                return $this->respondError('Could not generate a unique code.', 500);
+            }
+            $this->db->table('giftcards')->insert([
+                'giftcard_number' => $newCode,
+                'value'           => number_format($slice, 2, '.', ''),
+                'initial_value'   => number_format($slice, 2, '.', ''),
+                'status'          => self::STATUS_ACTIVE,
+                'currency'        => (string)$drop['currency'],
+                'recipient_name'  => $claimerName !== '' ? $claimerName : null,
+                'sender_name'     => 'Gift Drop',
+                'message'         => $drop['message'] ?? null,
+                'deleted'         => 0,
+            ]);
+            $newGiftcardId = (int)$this->db->insertID();
+            $this->writeHistory($newGiftcardId, [
+                'action'         => self::ACTION_DROP_CLAIMED,
+                'amount'         => '+' . number_format($slice, 2, '.', ''),
+                'balance_before' => '0.00',
+                'balance_after'  => number_format($slice, 2, '.', ''),
+                'comment'        => 'Minted from Gift Drop #' . (int)$drop['drop_id'],
+            ]);
+
+            $this->db->table('giftcard_drop_claims')->insert([
+                'drop_id'            => (int)$drop['drop_id'],
+                'slot_index'         => $slotsClaimed, // 0-based, monotonic
+                'claimed_giftcard_id'=> $newGiftcardId,
+                'claimed_amount'     => number_format($slice, 2, '.', ''),
+                'claimer_name'       => $claimerName !== '' ? $claimerName : null,
+                'claimer_phone'      => $claimerPhone !== '' ? $claimerPhone : null,
+                'ip'                 => $this->request->getIPAddress() ?: null,
+                'user_agent'         => mb_substr((string)$this->request->getUserAgent(), 0, 255),
+            ]);
+            $claimId = (int)$this->db->insertID();
+
+            $this->db->table('giftcard_drops')->where('drop_id', (int)$drop['drop_id'])->update([
+                'slots_claimed'    => $slotsClaimed + 1,
+                'amount_remaining' => number_format(max(0, $remaining - $slice), 2, '.', ''),
+            ]);
+
+            $this->db->transComplete();
+            if (!$this->db->transStatus()) {
+                return $this->respondError('Failed to claim drop.', 500);
+            }
+
+            return $this->respondSuccess([
+                'claim_id'        => $claimId,
+                'claimed_amount'  => $slice,
+                'currency'        => (string)$drop['currency'],
+                'giftcard_number' => $newCode,
+                'balance_url'     => '/g/' . $newCode,
+                'idempotent'      => false,
+            ], 'Claimed!');
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::publicDropClaim — ' . $e->getMessage());
+            return $this->respondError('Failed to claim drop.', 500);
+        }
+    }
+
+    /**
+     * Authenticated: cancel an unfinished drop and refund the residual
+     * amount_remaining back to the parent card. Already-claimed slices
+     * remain valid as standalone gift cards.
+     *
+     * POST /api/giftcards/drops/:dropId/cancel
+     */
+    public function dropCancel(int $dropId): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) {
+            return $authResponse;
+        }
+        if (!$this->dropsApplied()) {
+            return $this->respondError('Drops not available.', 503);
+        }
+
+        try {
+            $this->db->transStart();
+            $dropsTable = $this->db->prefixTable('giftcard_drops');
+            $drop = $this->db->query(
+                "SELECT * FROM {$dropsTable} WHERE drop_id = ? LIMIT 1 FOR UPDATE",
+                [$dropId],
+            )->getRowArray();
+            if ($drop === null) {
+                $this->db->transComplete();
+                return $this->respondError('Drop not found.', 404);
+            }
+            if (!empty($drop['cancelled_at'])) {
+                $this->db->transComplete();
+                return $this->respondError('Drop already cancelled.', 409);
+            }
+
+            $residual = (float)$drop['amount_remaining'];
+            $parentId = (int)$drop['parent_giftcard_id'];
+
+            // Refund residual to parent card (atomic under giftcards lock).
+            if ($residual > 0) {
+                $giftcardsTable = $this->db->prefixTable('giftcards');
+                $parent = $this->db->query(
+                    "SELECT * FROM {$giftcardsTable} WHERE giftcard_id = ? AND deleted = 0 LIMIT 1 FOR UPDATE",
+                    [$parentId],
+                )->getRowArray();
+                if ($parent !== null) {
+                    $newBalance = number_format((float)$parent['value'] + $residual, 2, '.', '');
+                    $newStatus = self::STATUS_ACTIVE;
+                    $this->applyBalanceChangeLocked($parentId, $parent, $newBalance, $newStatus, [
+                        'action'  => self::ACTION_DROP_REFUNDED,
+                        'amount'  => '+' . number_format($residual, 2, '.', ''),
+                        'comment' => 'Drop #' . $dropId . ' cancelled — residual refunded',
+                    ]);
+                }
+            }
+
+            $this->db->table('giftcard_drops')->where('drop_id', $dropId)->update([
+                'cancelled_at'    => date('Y-m-d H:i:s'),
+                'cancelled_reason'=> 'cancelled_by_operator',
+                'refunded_at'     => $residual > 0 ? date('Y-m-d H:i:s') : null,
+                'amount_remaining'=> '0.00',
+            ]);
+
+            $this->db->transComplete();
+            if (!$this->db->transStatus()) {
+                return $this->respondError('Failed to cancel drop.', 500);
+            }
+
+            return $this->respondSuccess([
+                'drop_id'         => $dropId,
+                'refunded_amount' => $residual,
+            ], 'Drop cancelled.');
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::dropCancel — ' . $e->getMessage());
+            return $this->respondError('Failed to cancel drop.', 500);
+        }
+    }
+
+    /**
+     * Distribution algorithm shared between dropCreate and publicDropClaim.
+     *
+     * Equal: total / slots.
+     *
+     * Random: WeChat-style "double-the-mean" — each draw picks uniformly
+     * from [minSlice, 2 * remaining / slotsLeft]. The last slot takes
+     * the remainder so the totals add up exactly. Result is rounded to
+     * 2 decimal places.
+     *
+     * @param string $mode 'equal' or 'random'
+     * @param float  $remaining amount left in the drop
+     * @param int    $slotsLeft slots not yet claimed (>=1)
+     * @param float  $minSlice  per-slice floor
+     */
+    private function computeDropSlice(string $mode, float $remaining, int $slotsLeft, float $minSlice): float
+    {
+        $remaining = round($remaining, 2);
+        if ($slotsLeft <= 0) {
+            return max($minSlice, $remaining);
+        }
+        if ($slotsLeft === 1) {
+            return max($minSlice, round($remaining, 2));
+        }
+        if ($mode === 'equal') {
+            return max($minSlice, round($remaining / $slotsLeft, 2));
+        }
+        // Random: uniformly in [minSlice, 2 * remaining / slotsLeft], but
+        // cap at remaining - minSlice * (slotsLeft - 1) so future slots
+        // still get at least minSlice each.
+        $maxCeiling = max($minSlice, $remaining - $minSlice * ($slotsLeft - 1));
+        $maxFair = 2 * $remaining / $slotsLeft;
+        $upper = min($maxCeiling, $maxFair);
+        if ($upper < $minSlice) return $minSlice;
+        $pickHundredths = random_int((int)round($minSlice * 100), (int)round($upper * 100));
+        return round($pickHundredths / 100, 2);
+    }
+
+    private function dropsApplied(): bool
+    {
+        return $this->bindingsApplied()
+            && $this->db->tableExists('giftcard_drops')
+            && $this->db->tableExists('giftcard_drop_claims');
+    }
+
     // ---------- Helpers ----------
 
     /**

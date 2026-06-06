@@ -95,6 +95,9 @@ $routes->group('api', static function ($routes) {
     $routes->post('giftcards/(:num)/transfer', 'Api\GiftcardsController::transferRequest/$1');
     $routes->get('giftcards/(:num)/transfers', 'Api\GiftcardsController::transferList/$1');
     $routes->delete('giftcards/(:num)/transfers/(:num)', 'Api\GiftcardsController::transferCancel/$1/$2');
+    // Gift Drops — hongbao-style (Slice E.4)
+    $routes->post('giftcards/(:num)/drop', 'Api\GiftcardsController::dropCreate/$1');
+    $routes->post('giftcards/drops/(:num)/cancel', 'Api\GiftcardsController::dropCancel/$1');
 
     // NFC binding + payment intents (Phase 6)
     $routes->get('giftcards/(:num)/bindings', 'Api\GiftcardsController::bindingIndex/$1');
@@ -230,6 +233,9 @@ $routes->group('api', static function ($routes) {
     // Sender re-gift — OTP-gated public transfer from /g/:code (Slice E.3)
     $routes->post('public/giftcards/(:segment)/transfer/send-otp', 'Api\PublicController::giftcardTransferSendOtp/$1');
     $routes->post('public/giftcards/(:segment)/transfer/confirm', 'Api\PublicController::giftcardTransferConfirm/$1');
+    // Gift Drops — hongbao-style (Slice E.4)
+    $routes->post('public/giftcards/drop/(:segment)/claim', 'Api\PublicController::giftcardDropClaim/$1');
+    $routes->get('public/giftcards/drop/(:segment)', 'Api\PublicController::giftcardDropLookup/$1');
     $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
     $routes->post('public/tickets/(:segment)/transfer/request', 'Api\PublicController::ticketTransferRequest/$1');
     $routes->post('public/tickets/(:segment)/transfer/confirm', 'Api\PublicController::ticketTransferConfirm/$1');

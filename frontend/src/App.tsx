@@ -44,6 +44,7 @@ const PublicGiftCardWelcomePage  = lazy(() => import('./pages/PublicGiftCardWelc
 const PublicGiftCardSelfServicePage = lazy(() => import('./pages/PublicGiftCardSelfServicePage').then((m) => ({ default: m.PublicGiftCardSelfServicePage })));
 const PublicGiftCardTransferPage = lazy(() => import('./pages/PublicGiftCardTransferPage').then((m) => ({ default: m.PublicGiftCardTransferPage })));
 const MyGiftsPage                = lazy(() => import('./pages/MyGiftsPage').then((m) => ({ default: m.MyGiftsPage })));
+const PublicGiftDropPage         = lazy(() => import('./pages/PublicGiftDropPage').then((m) => ({ default: m.PublicGiftDropPage })));
 const GiftCardDesignsPage        = lazy(() => import('./pages/GiftCardDesignsPage').then((m) => ({ default: m.GiftCardDesignsPage })));
 const GiftCardDenominationsPage  = lazy(() => import('./pages/GiftCardDenominationsPage').then((m) => ({ default: m.GiftCardDenominationsPage })));
 const GiftCardTenderDemoPage     = lazy(() => import('./pages/GiftCardTenderDemoPage').then((m) => ({ default: m.GiftCardTenderDemoPage })));
@@ -96,6 +97,8 @@ function AppRoutes() {
         <Route path="/g/:code/welcome" element={<PublicGiftCardWelcomePage />} />
         {/* My Gifts — OTP-gated phone roll-up. */}
         <Route path="/my-gifts" element={<MyGiftsPage />} />
+        {/* Gift Drops — hongbao-style public claim page. */}
+        <Route path="/gd/:token" element={<PublicGiftDropPage />} />
         <Route path="/ticket/:code" element={<PublicTicketPage />} />
         <Route path="/preview" element={<PreviewPage />} />
         <Route path="/preview/*" element={<PreviewPage />} />

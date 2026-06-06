@@ -64,6 +64,7 @@ import { Modal } from '../components/ui/Modal';
 import { showToast } from '../components/ui/Toast';
 import { playNotificationSound } from '../lib/realtime';
 import { BindModal } from '../components/giftcard/BindModal';
+import { DropCreateModal } from '../components/giftcard/DropCreateModal';
 import { giftcardBindingMock, type CardBinding } from '../lib/giftcard-bindings';
 
 type Status = 'active' | 'used' | 'expired' | 'disabled';
@@ -364,6 +365,7 @@ export function GiftCardsPage() {
   const [deleting, setDeleting] = useState<GiftCard | null>(null);
   const [transferTarget, setTransferTarget] = useState<GiftCard | null>(null);
   const [bindTarget, setBindTarget] = useState<{ card: GiftCard; prefillPhone?: string | null } | null>(null);
+  const [dropTarget, setDropTarget] = useState<GiftCard | null>(null);
   // Track NFC binding state per card code (client-side mock).
   const [bindings, setBindings] = useState<Record<string, CardBinding>>({});
 
@@ -910,6 +912,10 @@ export function GiftCardsPage() {
             setBindTarget({ card: detail.card, prefillPhone: detail.card.recipient_email ? null : null });
             setDetail(null);
           }}
+          onDrop={() => {
+            setDropTarget(detail.card);
+            setDetail(null);
+          }}
           onUnbind={async () => {
             await giftcardBindingMock.unbind(detail.card.giftcard_number);
             refreshBindings();
@@ -940,6 +946,20 @@ export function GiftCardsPage() {
           onBound={() => {
             refreshBindings();
             setBindTarget(null);
+          }}
+        />
+      )}
+
+      {/* Drop creation modal (Slice E.4) */}
+      {dropTarget && (
+        <DropCreateModal
+          cardId={dropTarget.giftcard_id}
+          cardBalance={dropTarget.value}
+          cardCurrency={dropTarget.currency}
+          onClose={() => setDropTarget(null)}
+          onCreated={async () => {
+            await load();
+            showToast('Drop created — share the link');
           }}
         />
       )}
@@ -1124,6 +1144,7 @@ function DetailModal({
   onRefresh,
   onTransfer,
   onBind,
+  onDrop,
   onUnbind,
 }: {
   detail: { card: GiftCard; history: HistoryEntry[] };
@@ -1132,6 +1153,7 @@ function DetailModal({
   onRefresh: () => Promise<void>;
   onTransfer: () => void;
   onBind: () => void;
+  onDrop: () => void;
   onUnbind: () => Promise<void>;
 }) {
   const { card, history } = detail;
@@ -1364,12 +1386,13 @@ function DetailModal({
         </div>
 
         {/* Actions row */}
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
           <ActionButton label="Redeem" icon={TrendingDown} active={activeAction === 'redeem'} onClick={() => setActiveAction('redeem')} disabled={card.status !== 'active' || card.pending_transfer !== null} />
           <ActionButton label="Top up" icon={Wallet} active={activeAction === 'topup'} onClick={() => setActiveAction('topup')} disabled={card.status === 'disabled' || card.pending_transfer !== null} />
           <ActionButton label="Refund" icon={TrendingUp} active={activeAction === 'refund'} onClick={() => setActiveAction('refund')} disabled={card.status === 'disabled' || card.pending_transfer !== null} />
           <ActionButton label="Adjust" icon={Pencil} active={activeAction === 'adjust'} onClick={() => setActiveAction('adjust')} disabled={card.status === 'disabled' || card.pending_transfer !== null} />
           <ActionButton label="Send as gift" icon={Gift} active={false} onClick={onTransfer} disabled={card.status !== 'active' || card.pending_transfer !== null} />
+          <ActionButton label="Drop" icon={PartyPopper} active={false} onClick={onDrop} disabled={card.status !== 'active' || card.pending_transfer !== null || card.value < 2} />
         </div>
 
         {activeAction && (

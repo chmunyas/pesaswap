@@ -136,7 +136,11 @@ Each PNG is a single-page walk-through with step-by-step instructions, embedded 
     <td align="center" width="25%"><a href="docs/use-cases/09-recipient-ceremony.png"><img src="docs/use-cases/09-recipient-ceremony.png" alt="Use case 9 — Recipient ceremony" width="100%"></a><br><sub><b>9. Recipient ceremony</b> ✨ — <code>/g/:code/welcome</code> envelope reveal + chime + "Keep it" CTA</sub></td>
     <td align="center" width="25%"><a href="docs/use-cases/10-wallet-passes.png"><img src="docs/use-cases/10-wallet-passes.png" alt="Use case 10 — Wallet passes" width="100%"></a><br><sub><b>10. Wallet passes</b> ✨ — Apple <code>storeCard</code> + Google <code>giftCardObject</code>, reuses ticket cert pipeline</sub></td>
     <td align="center" width="25%"><a href="docs/use-cases/11-my-gifts.png"><img src="docs/use-cases/11-my-gifts.png" alt="Use case 11 — My Gifts" width="100%"></a><br><sub><b>11. My Gifts</b> ✨ — <code>/my-gifts</code> OTP-gated roll-up of all cards bound to your phone</sub></td>
-    <td align="center" width="25%"><a href="docs/use-cases/12-sender-regift.png"><img src="docs/use-cases/12-sender-regift.png" alt="Use case 12 — Sender re-gift" width="100%"></a><br><sub><b>12. Re-gift to a friend</b> ✨ <em>new</em> — recipient-initiated transfer from <code>/g/:code</code>, OTP via bound phone</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/12-sender-regift.png"><img src="docs/use-cases/12-sender-regift.png" alt="Use case 12 — Sender re-gift" width="100%"></a><br><sub><b>12. Re-gift to a friend</b> ✨ — recipient-initiated transfer from <code>/g/:code</code>, OTP via bound phone</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="25%"><a href="docs/use-cases/13-gift-drop.png"><img src="docs/use-cases/13-gift-drop.png" alt="Use case 13 — Gift Drop (hongbao)" width="100%"></a><br><sub><b>13. Gift Drop (hongbao)</b> ✨ <em>new</em> — one card → one share link → N slices for the first N to claim (equal or random)</sub></td>
+    <td colspan="3"></td>
   </tr>
 </table>
 
