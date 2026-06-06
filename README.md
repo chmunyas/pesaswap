@@ -112,18 +112,24 @@ PESASWAP takes the proven OSPOS PHP backend (sales, customers, items, employees,
 
 Each PNG is a single-page walk-through with step-by-step instructions, embedded screenshots, the API routes involved, and the commit history.
 
+**June 2026 redesign** (Ive ⊕ WeChat principles): the cashier flow collapsed from 7 sections to **3 visible fields + a single "More options" disclosure**. NFC binding folded into issue (one button instead of two), the recipient now lands on a **/g/:code/welcome ceremony page** (1.5s gradient reveal + payment chime), the public balance page has **tap-to-show-cashier full-screen QR**, and transfer tokens are now **6-word memorable phrases** (`coral-music-river-jet-vivid-mango`) instead of 32-hex strings. See commits `e3ad06e2d` / `87e7a4f4c` / `e4b8fde42` / `481fd41c0`.
+
 <table>
   <tr>
-    <td align="center" width="25%"><a href="docs/use-cases/01-issuance.png"><img src="docs/use-cases/01-issuance.png" alt="Use case 1 — Issuance" width="100%"></a><br><sub><b>1. Issuance</b> — cashier hands a new card to a customer (design + denomination + scheduled delivery)</sub></td>
-    <td align="center" width="25%"><a href="docs/use-cases/02-binding.png"><img src="docs/use-cases/02-binding.png" alt="Use case 2 — NFC binding" width="100%"></a><br><sub><b>2. NFC binding</b> — cashier links card to customer's phone for PIN-authorised redemptions</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/01-issuance.png"><img src="docs/use-cases/01-issuance.png" alt="Use case 1 — Send a gift" width="100%"></a><br><sub><b>1. Send a gift</b> — 3-field form, optional "More" disclosure, inline phone link</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/02-binding.png"><img src="docs/use-cases/02-binding.png" alt="Use case 2 — NFC binding" width="100%"></a><br><sub><b>2. NFC binding</b> — usually folded into issue, available standalone for unbound cards</sub></td>
     <td align="center" width="25%"><a href="docs/use-cases/03-redemption.png"><img src="docs/use-cases/03-redemption.png" alt="Use case 3 — Multi-tender redemption" width="100%"></a><br><sub><b>3. Multi-tender redemption</b> — card balance / MNO / wallet / Co-op / BNPL picker with live intent status</sub></td>
-    <td align="center" width="25%"><a href="docs/use-cases/04-transfer.png"><img src="docs/use-cases/04-transfer.png" alt="Use case 4 — Send as gift" width="100%"></a><br><sub><b>4. Send as gift</b> — code rotation on accept so sender's copy stops working</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/04-transfer.png"><img src="docs/use-cases/04-transfer.png" alt="Use case 4 — Give-to-friend" width="100%"></a><br><sub><b>4. Give-to-friend</b> — 6-word memorable phrase replaces 32-hex token, code rotates on accept</sub></td>
   </tr>
   <tr>
-    <td align="center" width="25%"><a href="docs/use-cases/05-self-service.png"><img src="docs/use-cases/05-self-service.png" alt="Use case 5 — Customer self-service" width="100%"></a><br><sub><b>5. Self-service portal</b> — customer manages binding + Danger Zone disable (OTP-gated)</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/05-self-service.png"><img src="docs/use-cases/05-self-service.png" alt="Use case 5 — Customer self-service" width="100%"></a><br><sub><b>5. Self-service portal</b> — small ⚙ gear icon entry, OTP-gated unbind + disable kill-switch</sub></td>
     <td align="center" width="25%"><a href="docs/use-cases/06-scheduled-delivery.png"><img src="docs/use-cases/06-scheduled-delivery.png" alt="Use case 6 — Scheduled delivery" width="100%"></a><br><sub><b>6. Scheduled delivery</b> — issue today, email delivers later via spark cron</sub></td>
-    <td align="center" width="25%"><a href="docs/use-cases/07-balance-lookup.png"><img src="docs/use-cases/07-balance-lookup.png" alt="Use case 7 — Public balance lookup" width="100%"></a><br><sub><b>7. Public balance lookup</b> — customer scans QR, no auth, rate-limited, anti-enumeration</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/07-balance-lookup.png"><img src="docs/use-cases/07-balance-lookup.png" alt="Use case 7 — Balance + show-to-cashier" width="100%"></a><br><sub><b>7. Balance + show-to-cashier</b> — tap QR for full-screen overlay, inverted scan flow</sub></td>
     <td align="center" width="25%"><a href="docs/use-cases/08-legacy-pos-guard.png"><img src="docs/use-cases/08-legacy-pos-guard.png" alt="Use case 8 — Legacy POS guard" width="100%"></a><br><sub><b>8. Legacy POS guard</b> — bound cards refuse raw-code redemption (defence-in-depth)</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="25%"><a href="docs/use-cases/09-recipient-ceremony.png"><img src="docs/use-cases/09-recipient-ceremony.png" alt="Use case 9 — Recipient ceremony" width="100%"></a><br><sub><b>9. Recipient ceremony</b> ✨ <em>new</em> — <code>/g/:code/welcome</code> envelope reveal + chime + "Keep it" CTA</sub></td>
+    <td colspan="3"></td>
   </tr>
 </table>
 
