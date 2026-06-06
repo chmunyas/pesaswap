@@ -2611,16 +2611,29 @@ class TicketsController extends BaseApiController
 
     private function buildIcs(object $row, string $code): string
     {
-        $dtFmt = static function (?string $iso): string {
+        $tzName = app_timezone() ?: 'UTC';
+        try {
+            $tz = new \DateTimeZone($tzName);
+        } catch (\Exception $e) {
+            $tzName = 'UTC';
+            $tz     = new \DateTimeZone('UTC');
+        }
+        $isUtc = $tzName === 'UTC';
+
+        $dtFmt = static function (?string $iso) use ($tz, $isUtc): string {
             if ($iso === null || $iso === '') {
                 return '';
             }
-            $ts = strtotime($iso);
-            if ($ts === false) {
+            try {
+                $dt = new \DateTime($iso, $tz);
+            } catch (\Exception $e) {
                 return '';
             }
-
-            return gmdate('Ymd\THis\Z', $ts);
+            // For UTC, emit floating Z form. For named tz, emit local-time form
+            // (the TZID parameter is added on the DTSTART/DTEND line below).
+            return $isUtc
+                ? $dt->setTimezone(new \DateTimeZone('UTC'))->format('Ymd\THis\Z')
+                : $dt->format('Ymd\THis');
         };
         $esc = static fn (string $s): string => str_replace(['\\', "\n", ',', ';'], ['\\\\', '\\n', '\\,', '\\;'], $s);
 
@@ -2633,15 +2646,28 @@ class TicketsController extends BaseApiController
             'BEGIN:VCALENDAR',
             'VERSION:2.0',
             'PRODID:-//Pesaswap//Tickets//EN',
-            'BEGIN:VEVENT',
-            'UID:' . $code . '@pesaswap',
-            'DTSTAMP:' . gmdate('Ymd\THis\Z'),
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH',
         ];
+
+        // Emit VTIMEZONE for named timezones so strict RFC 5545 clients
+        // (Outlook, some Linux mailers) interpret DTSTART/DTEND correctly.
+        // Lenient clients (Google/Apple Calendar) accept TZID alone, but
+        // including a minimal STANDARD/DAYLIGHT VTIMEZONE never hurts.
+        if (! $isUtc) {
+            $lines = array_merge($lines, $this->buildVtimezone($tz, $row));
+        }
+
+        $lines[] = 'BEGIN:VEVENT';
+        $lines[] = 'UID:' . $code . '@pesaswap';
+        $lines[] = 'DTSTAMP:' . gmdate('Ymd\THis\Z');
+
+        $tzParam = $isUtc ? '' : ';TZID=' . $tzName;
         if ($start !== '') {
-            $lines[] = 'DTSTART:' . $start;
+            $lines[] = 'DTSTART' . $tzParam . ':' . $start;
         }
         if ($end !== '') {
-            $lines[] = 'DTEND:' . $end;
+            $lines[] = 'DTEND' . $tzParam . ':' . $end;
         }
         $lines[] = 'SUMMARY:' . $esc($title);
         if ($desc !== '') {
@@ -2651,6 +2677,77 @@ class TicketsController extends BaseApiController
         $lines[] = 'END:VCALENDAR';
 
         return implode("\r\n", $lines) . "\r\n";
+    }
+
+    /**
+     * Builds a minimal VTIMEZONE block for the given timezone, anchored at the
+     * event's DTSTART so it captures the correct DST offset for that instant.
+     * Includes both STANDARD and DAYLIGHT subcomponents when the tz observes DST.
+     *
+     * @return list<string>
+     */
+    private function buildVtimezone(\DateTimeZone $tz, object $row): array
+    {
+        $anchor = $row->valid_from ?? null;
+        try {
+            $anchorDt = $anchor ? new \DateTime($anchor, $tz) : new \DateTime('now', $tz);
+        } catch (\Exception $e) {
+            $anchorDt = new \DateTime('now', $tz);
+        }
+
+        // Use a far-past DTSTART so the VTIMEZONE rule covers the event year(s).
+        $year      = (int) $anchorDt->format('Y');
+        $stdAnchor = (new \DateTime("$year-01-15 02:00:00", $tz))->format('Ymd\THis');
+        $dstAnchor = (new \DateTime("$year-07-15 02:00:00", $tz))->format('Ymd\THis');
+
+        $stdOffsetSec = (new \DateTime("$year-01-15 12:00:00", $tz))->getOffset();
+        $dstOffsetSec = (new \DateTime("$year-07-15 12:00:00", $tz))->getOffset();
+
+        $fmtOffset = static function (int $secs): string {
+            $sign  = $secs < 0 ? '-' : '+';
+            $abs   = abs($secs);
+            $hours = intdiv($abs, 3600);
+            $mins  = intdiv($abs % 3600, 60);
+            return sprintf('%s%02d%02d', $sign, $hours, $mins);
+        };
+
+        $stdOffset = $fmtOffset($stdOffsetSec);
+        $dstOffset = $fmtOffset($dstOffsetSec);
+        $observesDst = $stdOffsetSec !== $dstOffsetSec;
+
+        $lines = [
+            'BEGIN:VTIMEZONE',
+            'TZID:' . $tz->getName(),
+        ];
+
+        if ($observesDst) {
+            $lines = array_merge($lines, [
+                'BEGIN:STANDARD',
+                'DTSTART:' . $stdAnchor,
+                'TZOFFSETFROM:' . $dstOffset,
+                'TZOFFSETTO:' . $stdOffset,
+                'TZNAME:STD',
+                'END:STANDARD',
+                'BEGIN:DAYLIGHT',
+                'DTSTART:' . $dstAnchor,
+                'TZOFFSETFROM:' . $stdOffset,
+                'TZOFFSETTO:' . $dstOffset,
+                'TZNAME:DST',
+                'END:DAYLIGHT',
+            ]);
+        } else {
+            $lines = array_merge($lines, [
+                'BEGIN:STANDARD',
+                'DTSTART:' . $stdAnchor,
+                'TZOFFSETFROM:' . $stdOffset,
+                'TZOFFSETTO:' . $stdOffset,
+                'TZNAME:STD',
+                'END:STANDARD',
+            ]);
+        }
+        $lines[] = 'END:VTIMEZONE';
+
+        return $lines;
     }
 
     // ========================================================================
