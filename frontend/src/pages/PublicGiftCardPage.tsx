@@ -268,6 +268,17 @@ export function PublicGiftCardPage() {
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>This is a bearer instrument — anyone with the code can redeem it. Keep it safe.</span>
             </div>
+
+            {/* "My Gifts" discovery link — small, unobtrusive. Recipients
+                who have multiple cards bound to their phone benefit most. */}
+            <p className="text-center">
+              <a
+                href="/my-gifts"
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 hover:text-blue-800"
+              >
+                View all gifts linked to my phone →
+              </a>
+            </p>
           </>
         ) : (
           <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-center dark:border-amber-900 dark:bg-amber-900/20">

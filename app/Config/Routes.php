@@ -218,6 +218,9 @@ $routes->group('api', static function ($routes) {
     // Wallet passes (Phase E redesign — gift cards live alongside tickets)
     $routes->get('public/giftcards/(:segment)/wallet/google', 'Api\PublicController::giftcardGoogleWallet/$1');
     $routes->get('public/giftcards/(:segment)/wallet/apple', 'Api\PublicController::giftcardAppleWallet/$1');
+    // My Gifts — OTP-gated roll-up by phone (Slice E.2)
+    $routes->post('public/giftcards/by-phone/send-otp', 'Api\PublicController::giftcardListByPhoneSendOtp');
+    $routes->post('public/giftcards/by-phone/verify', 'Api\PublicController::giftcardListByPhoneVerify');
     $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
     $routes->post('public/tickets/(:segment)/transfer/request', 'Api\PublicController::ticketTransferRequest/$1');
     $routes->post('public/tickets/(:segment)/transfer/confirm', 'Api\PublicController::ticketTransferConfirm/$1');

@@ -182,11 +182,26 @@ class PublicController extends BaseApiController
         return $this->delegateToGiftcards('publicAppleWallet', $code);
     }
 
-    private function delegateToGiftcards(string $method, string $arg): ResponseInterface
+    /**
+     * POST /api/public/giftcards/by-phone/send-otp — OTP to authenticate a
+     * "My Gifts" lookup by phone.
+     * POST /api/public/giftcards/by-phone/verify — verify + return cards.
+     */
+    public function giftcardListByPhoneSendOtp(): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicSendOtpByPhone');
+    }
+
+    public function giftcardListByPhoneVerify(): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicListCardsByPhone');
+    }
+
+    private function delegateToGiftcards(string $method, string ...$args): ResponseInterface
     {
         $gc = new GiftcardsController();
         $gc->initController($this->request, $this->response, service('logger'));
 
-        return $gc->{$method}($arg);
+        return $gc->{$method}(...$args);
     }
 }

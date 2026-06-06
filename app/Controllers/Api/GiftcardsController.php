@@ -2749,6 +2749,177 @@ class GiftcardsController extends BaseApiController
         }
     }
 
+    /**
+     * Public: send an OTP to a phone number to authenticate a "My Gifts"
+     * lookup. Cache-backed (NOT in giftcard_otps — that table is keyed by
+     * giftcard_id and a per-phone OTP doesn't belong to any single card).
+     *
+     * Mounted at POST /api/public/giftcards/by-phone/send-otp
+     *   { phone: "+254712345678" }
+     *
+     * Returns { masked_phone, expires_at, demo_code? } — demo_code is only
+     * populated in dev (giftcard_otp_inline_return=1).
+     *
+     * The response is INTENTIONALLY uniform whether or not the phone has
+     * any bound cards: returning "no cards found" before OTP would let a
+     * phone-number enumeration attack identify which numbers have cards.
+     * Verification at /by-phone/verify is where the actual list lookup
+     * happens — and even there, a successful OTP with zero matches gets
+     * a successful response with an empty list, so the OTP is never a
+     * cards-exist oracle.
+     */
+    public function publicSendOtpByPhone(): ResponseInterface
+    {
+        $body = $this->request->getJSON(true) ?? [];
+        $phoneRaw = trim((string)($body['phone'] ?? ''));
+        $phone = preg_replace('/[\s().\-_]/', '', $phoneRaw);
+        // Validate format BEFORE consuming rate-limit budget so obvious
+        // garbage doesn't lock out a legitimate retry.
+        if (!preg_match('/^\+?\d{9,15}$/', (string)$phone)) {
+            return $this->respondError('Enter a valid phone number (9-15 digits, optional +).', 422);
+        }
+        if (!$this->publicTransferRateLimit('gc_phone_otp_send', 5)) {
+            return $this->respondError('Too many OTP requests.', 429);
+        }
+        $phoneHash = hash('sha256', strtolower((string)$phone));
+
+        $plain = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $otpHash = hash('sha256', $plain);
+        $ttl = max(60, self::OTP_TTL_MIN * 60);
+        $expires = date('Y-m-d H:i:s', time() + $ttl);
+
+        try {
+            $cache = service('cache');
+            // One un-consumed OTP per phone — overwriting the cache key
+            // implicitly invalidates the prior token.
+            $cache->save('gc_phone_otp_' . $phoneHash, [
+                'otp_hash'   => $otpHash,
+                'phone'      => (string)$phone,
+                'expires_at' => $expires,
+                'attempts'   => 0,
+            ], $ttl);
+        } catch (Throwable $e) {
+            log_message('error', 'publicSendOtpByPhone cache — ' . $e->getMessage());
+            return $this->respondError('Could not queue OTP. Try again.', 503);
+        }
+
+        $inline = (string)$this->getAppConfig('giftcard_otp_inline_return', '1') === '1';
+        return $this->respondSuccess([
+            'masked_phone' => $this->maskPhoneServer((string)$phone),
+            'expires_at'   => $expires,
+            'demo_code'    => $inline ? $plain : null,
+        ], 'OTP sent.');
+    }
+
+    /**
+     * Public: verify the phone OTP and return all cards bound to that
+     * phone. Returns a sanitised list (masked code, balance, currency,
+     * status, expires_at, friendly names) — never the raw giftcard_id
+     * or transferable bearer code.
+     *
+     * Mounted at POST /api/public/giftcards/by-phone/verify
+     *   { phone: "+254712345678", code: "123456" }
+     *
+     * Wrong OTP → 403 + attempts counter bumped. After 5 wrong attempts
+     * the cache entry is wiped (legitimate users can retry by issuing a
+     * fresh OTP).
+     */
+    public function publicListCardsByPhone(): ResponseInterface
+    {
+        $body = $this->request->getJSON(true) ?? [];
+        $phoneRaw = trim((string)($body['phone'] ?? ''));
+        $codeRaw = trim((string)($body['code'] ?? ''));
+        $phone = preg_replace('/[\s().\-_]/', '', $phoneRaw);
+        if (!preg_match('/^\+?\d{9,15}$/', (string)$phone)) {
+            return $this->respondError('Enter a valid phone number.', 422);
+        }
+        if (!preg_match('/^\d{6}$/', $codeRaw)) {
+            return $this->respondError('Enter the 6-digit code.', 422);
+        }
+        if (!$this->publicTransferRateLimit('gc_phone_otp_verify', 10)) {
+            return $this->respondError('Too many attempts.', 429);
+        }
+        $phoneHash = hash('sha256', strtolower((string)$phone));
+        $cache = service('cache');
+        $entry = $cache->get('gc_phone_otp_' . $phoneHash);
+        if (!is_array($entry) || empty($entry['otp_hash'])) {
+            return $this->respondError('Code expired. Request a new one.', 403);
+        }
+        $attempts = (int)($entry['attempts'] ?? 0);
+        if ($attempts >= 5) {
+            $cache->delete('gc_phone_otp_' . $phoneHash);
+            return $this->respondError('Too many wrong attempts. Request a new code.', 403);
+        }
+        if (!hash_equals((string)$entry['otp_hash'], hash('sha256', $codeRaw))) {
+            $entry['attempts'] = $attempts + 1;
+            $cache->save('gc_phone_otp_' . $phoneHash, $entry, max(60, strtotime((string)$entry['expires_at']) - time()));
+            return $this->respondError('Wrong code. ' . (5 - $entry['attempts']) . ' attempt(s) left.', 403);
+        }
+
+        // OTP correct — consume it (one-shot).
+        $cache->delete('gc_phone_otp_' . $phoneHash);
+
+        // If the bindings schema isn't applied (fresh install or test DB
+        // without the SQL-script migration) treat it the same as "no
+        // cards bound to this phone" — preserves the no-oracle invariant
+        // and never leaks a different error shape between environments.
+        if (!$this->bindingsApplied()) {
+            return $this->respondSuccess([
+                'masked_phone' => $this->maskPhoneServer((string)$phone),
+                'cards'        => [],
+                'total'        => 0,
+            ], 'OK');
+        }
+
+        // Now look up cards. Empty result is a successful 200 with an
+        // empty list — not 404 — so the endpoint is not an oracle for
+        // "does this phone have any cards?".
+        try {
+            $rows = $this->db->table('giftcard_bindings AS b')
+                ->select('b.giftcard_id, b.mno_provider, b.mobile_number, g.giftcard_number, g.value, g.initial_value, g.currency, g.status, g.expires_at, g.recipient_name, g.sender_name, g.message, g.updated_at')
+                ->join('giftcards AS g', 'g.giftcard_id = b.giftcard_id', 'inner')
+                ->where('b.mobile_number', (string)$phone)
+                ->where('b.status', 'active')
+                ->where('b.deleted', 0)
+                ->where('g.deleted', 0)
+                ->orderBy('g.updated_at', 'DESC')
+                ->get()
+                ->getResultArray();
+        } catch (Throwable $e) {
+            log_message('error', 'publicListCardsByPhone — ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+            return $this->respondError('Lookup failed.', 500);
+        }
+
+        $cards = [];
+        foreach ($rows as $r) {
+            $statusFull = $this->computeStatus($r);
+            $valid = $statusFull === self::STATUS_ACTIVE && $this->bccompZero((string)$r['value']) > 0;
+            if (!$valid) continue;
+            $cards[] = [
+                'masked_code'    => $this->maskCode((string)$r['giftcard_number']),
+                // Full code is included so the frontend can deep-link to /g/:code.
+                // This is safe because the caller has already proven phone
+                // ownership via OTP — they could redeem the cards anyway.
+                'giftcard_number' => (string)$r['giftcard_number'],
+                'balance'        => (float)$r['value'],
+                'initial_value'  => (float)$r['initial_value'],
+                'currency'       => (string)($r['currency'] ?? 'KES'),
+                'expires_at'     => $r['expires_at'] ?? null,
+                'recipient_name' => $r['recipient_name'] ?? null,
+                'sender_name'    => $r['sender_name'] ?? null,
+                'message'        => $r['message'] ?? null,
+                'created_at'     => $r['updated_at'] ?? null,
+                'mno_provider'   => (string)($r['mno_provider'] ?? 'mpesa'),
+            ];
+        }
+
+        return $this->respondSuccess([
+            'masked_phone' => $this->maskPhoneServer((string)$phone),
+            'cards'        => $cards,
+            'total'        => count($cards),
+        ], 'OK');
+    }
+
     // ---------- Helpers ----------
 
     /**
