@@ -298,6 +298,9 @@ interface CreateForm {
   value: string;
   recipient_name: string;
   recipient_email: string;
+  recipient_phone: string;
+  bind_on_issue: boolean;
+  mno_provider: 'mpesa' | 'airtel' | 'momo';
   sender_name: string;
   message: string;
   currency: string;
@@ -312,6 +315,9 @@ const EMPTY_CREATE: CreateForm = {
   value: '1000',
   recipient_name: '',
   recipient_email: '',
+  recipient_phone: '',
+  bind_on_issue: true,
+  mno_provider: 'mpesa',
   sender_name: '',
   message: '',
   currency: 'KES',
@@ -349,6 +355,7 @@ export function GiftCardsPage() {
   const [denominations, setDenominations] = useState<DenominationOption[]>([]);
 
   const [showCreate, setShowCreate] = useState(false);
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [createForm, setCreateForm] = useState<CreateForm>(EMPTY_CREATE);
   const [creating, setCreating] = useState(false);
 
@@ -426,6 +433,11 @@ export function GiftCardsPage() {
       showToast('Enter a positive amount', 'error');
       return;
     }
+    const phoneNormalized = createForm.recipient_phone.replace(/\s+/g, '').trim();
+    if (createForm.bind_on_issue && phoneNormalized && phoneNormalized.length < 7) {
+      showToast('Enter a valid phone number to link the card', 'error');
+      return;
+    }
     setCreating(true);
     try {
       const res = await api.giftcards.create({
@@ -443,17 +455,34 @@ export function GiftCardsPage() {
       });
       const fresh = res.data?.giftcard ? normalizeGiftCard(res.data.giftcard as Record<string, unknown>) : null;
       const code = fresh?.giftcard_number ?? '';
-      showToast(`Gift card ${code} issued`);
+
+      // Inline bind: if phone was given AND toggle is on, link immediately so
+      // the cashier doesn't have to chase a second modal. This is the
+      // collapsed Issue→Bind flow from the Jony-Ive/WeChat redesign.
+      let bindNote = '';
+      if (fresh && createForm.bind_on_issue && phoneNormalized) {
+        try {
+          await giftcardBindingMock.bind({
+            giftcard_code: fresh.giftcard_number,
+            mobile_number: phoneNormalized,
+            mno_provider: createForm.mno_provider,
+          });
+          refreshBindings();
+          bindNote = ` · linked to ${giftcardBindingMock.maskPhone(phoneNormalized)}`;
+        } catch (err) {
+          // Soft-fail the bind so the cashier still has a working card.
+          // Surface a follow-up bind modal so they can retry without
+          // re-entering all the issue data.
+          showToast(`Card issued but link failed: ${err instanceof Error ? err.message : 'STK push error'}`, 'error');
+          setBindTarget({ card: fresh, prefillPhone: phoneNormalized });
+        }
+      }
+      showToast(`Gift card ${code} issued${bindNote}`);
       setShowCreate(false);
+      setShowMoreOptions(false);
       setCreateForm(EMPTY_CREATE);
       playNotificationSound('payment');
       await load();
-      // Post-create prompt to bind to phone (NFC linking flow). Only when a
-      // card object was returned and an email is present (the email signals
-      // we have a real recipient on file).
-      if (fresh && createForm.recipient_email) {
-        setBindTarget({ card: fresh, prefillPhone: null });
-      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Create failed', 'error');
     } finally {
@@ -507,7 +536,7 @@ export function GiftCardsPage() {
           className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600"
         >
           <Plus className="h-4 w-4" />
-          Issue Gift Card
+          Send a gift
         </button>
       </div>
 
@@ -576,43 +605,45 @@ export function GiftCardsPage() {
         </div>
       )}
 
-      {/* Create modal */}
-      <Modal isOpen={showCreate} onClose={() => !creating && setShowCreate(false)} title="Issue gift card" size="lg">
-        <form onSubmit={handleCreate} className="space-y-4">
-          {/* Design picker (modernization). Empty list = migration not applied; hide block. */}
-          {designs.length > 0 && (
-            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-              <p className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-gray-500">
-                <Palette className="h-3 w-3" /> Design
-              </p>
-              <div className="mt-2 grid grid-cols-3 gap-2 md:grid-cols-6">
-                <button
-                  type="button"
-                  onClick={() => setCreateForm({ ...createForm, design_id: '' })}
-                  className={`flex aspect-square flex-col items-center justify-center rounded-lg border text-[10px] font-semibold transition ${
-                    createForm.design_id === '' ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-gray-200 hover:border-gray-300 dark:border-gray-700'
-                  }`}
-                  aria-label="No design"
-                >
-                  <XIcon className="mb-1 h-4 w-4 text-gray-400" />
-                  None
-                </button>
-                {designs.map((d) => (
-                  <DesignTile
-                    key={d.design_id}
-                    design={d}
-                    selected={createForm.design_id === String(d.design_id)}
-                    onClick={() => setCreateForm({ ...createForm, design_id: String(d.design_id) })}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
+      {/* Create modal — collapsed redesign (3 visible fields by default).
+          "More options" disclosure hides design / denomination / scheduling /
+          payment-method, which power users rarely need but still appreciate. */}
+      <Modal
+        isOpen={showCreate}
+        onClose={() => {
+          if (creating) return;
+          setShowCreate(false);
+          setShowMoreOptions(false);
+        }}
+        title="Send a gift"
+        size="lg"
+      >
+        <form onSubmit={handleCreate} className="space-y-5">
+          {/* === The 3 essential fields === */}
 
-          {/* Preset denomination chips (modernization). */}
-          {denominations.filter((d) => d.currency === createForm.currency).length > 0 && (
-            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-              <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">Preset amount ({createForm.currency})</p>
+          {/* Amount, with currency dropdown stuck to the left + preset chips
+              below if denominations exist. */}
+          <Field label="Amount" required>
+            <div className="flex">
+              <select
+                value={createForm.currency}
+                onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value, denomination_id: '' })}
+                className="rounded-l-lg border border-r-0 border-gray-200 bg-gray-50 px-2 text-xs font-mono font-semibold dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              >
+                <option>KES</option><option>USD</option><option>EUR</option><option>GBP</option><option>NGN</option><option>UGX</option><option>TZS</option>
+              </select>
+              <input
+                required
+                type="number"
+                min="1"
+                step="0.01"
+                value={createForm.value}
+                onChange={(e) => setCreateForm({ ...createForm, value: e.target.value, denomination_id: '' })}
+                className="w-full rounded-r-lg border border-gray-200 bg-white px-3 py-2 text-base font-semibold dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                autoFocus
+              />
+            </div>
+            {denominations.filter((d) => d.currency === createForm.currency).length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {denominations
                   .filter((d) => d.currency === createForm.currency)
@@ -625,7 +656,7 @@ export function GiftCardsPage() {
                         denomination_id: createForm.denomination_id === String(d.denomination_id) ? '' : String(d.denomination_id),
                         value: createForm.denomination_id === String(d.denomination_id) ? createForm.value : String(d.amount),
                       })}
-                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                      className={`rounded-full border px-2.5 py-1 text-xs font-semibold transition ${
                         createForm.denomination_id === String(d.denomination_id)
                           ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
                           : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'
@@ -635,101 +666,172 @@ export function GiftCardsPage() {
                     </button>
                   ))}
               </div>
-            </div>
-          )}
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Amount" required>
-              <div className="flex">
-                <select
-                  value={createForm.currency}
-                  onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value, denomination_id: '' })}
-                  className="rounded-l-lg border border-r-0 border-gray-200 bg-gray-50 px-2 text-xs font-mono font-semibold dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                >
-                  <option>KES</option><option>USD</option><option>EUR</option><option>GBP</option><option>NGN</option><option>UGX</option><option>TZS</option>
-                </select>
-                <input
-                  required
-                  type="number"
-                  min="1"
-                  step="0.01"
-                  value={createForm.value}
-                  onChange={(e) => setCreateForm({ ...createForm, value: e.target.value, denomination_id: '' })}
-                  className="w-full rounded-r-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                />
-              </div>
-            </Field>
-            <Field label="Expires in (days)">
-              <input
-                type="number"
-                min="1"
-                max="3650"
-                value={createForm.expires_in_days}
-                onChange={(e) => setCreateForm({ ...createForm, expires_in_days: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-              />
-            </Field>
-          </div>
-
-          <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-            <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">Recipient (optional)</p>
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              <input
-                placeholder="Recipient name"
-                value={createForm.recipient_name}
-                onChange={(e) => setCreateForm({ ...createForm, recipient_name: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-              />
-              <input
-                type="email"
-                placeholder="Recipient email"
-                value={createForm.recipient_email}
-                onChange={(e) => setCreateForm({ ...createForm, recipient_email: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-              />
-              <input
-                placeholder="Sender name"
-                value={createForm.sender_name}
-                onChange={(e) => setCreateForm({ ...createForm, sender_name: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white md:col-span-2"
-              />
-              <textarea
-                placeholder="Personal message (e.g. Happy Birthday!)"
-                rows={2}
-                value={createForm.message}
-                onChange={(e) => setCreateForm({ ...createForm, message: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white md:col-span-2"
-              />
-            </div>
-            <div className="mt-2">
-              <p className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-gray-500">
-                <Calendar className="h-3 w-3" /> Schedule delivery (optional)
-              </p>
-              <input
-                type="datetime-local"
-                value={createForm.deliver_at}
-                onChange={(e) => setCreateForm({ ...createForm, deliver_at: e.target.value })}
-                min={new Date(Date.now() + 60 * 1000).toISOString().slice(0, 16)}
-                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white md:max-w-[18rem]"
-              />
-              <p className="mt-1 text-[10px] text-gray-500">
-                Leave blank to send the delivery email immediately. With a date, the card is created in <span className="font-semibold">pending</span> state and dispatched by <code className="font-mono">spark giftcards:dispatch</code>.
-              </p>
-            </div>
-          </div>
-
-          <Field label="Payment method (purchaser pays via)">
-            <select
-              value={createForm.payment_provider}
-              onChange={(e) => setCreateForm({ ...createForm, payment_provider: e.target.value as '' | Provider })}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-            >
-              <option value="">— Not recorded —</option>
-              {(Object.keys(PROVIDER_LABELS) as Provider[]).map((p) => (
-                <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
-              ))}
-            </select>
+            )}
           </Field>
+
+          {/* Recipient phone — the only contact field by default; everything
+              else (name, email) lives in More options. The phone drives both
+              the recipient-name imprint AND the NFC binding. */}
+          <Field label="Send to phone">
+            <div className="flex gap-2">
+              <select
+                value={createForm.mno_provider}
+                onChange={(e) => setCreateForm({ ...createForm, mno_provider: e.target.value as 'mpesa' | 'airtel' | 'momo' })}
+                className="w-28 rounded-lg border border-gray-200 bg-gray-50 px-2 text-xs font-mono font-semibold dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                aria-label="Mobile network"
+                disabled={!createForm.bind_on_issue}
+              >
+                <option value="mpesa">M-Pesa</option>
+                <option value="airtel">Airtel</option>
+                <option value="momo">MoMo</option>
+              </select>
+              <input
+                type="tel"
+                inputMode="tel"
+                placeholder="+254 7XX XXX XXX"
+                value={createForm.recipient_phone}
+                onChange={(e) => setCreateForm({ ...createForm, recipient_phone: e.target.value })}
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              />
+            </div>
+            <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={createForm.bind_on_issue}
+                onChange={(e) => setCreateForm({ ...createForm, bind_on_issue: e.target.checked })}
+                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="flex items-center gap-1">
+                <Smartphone className="h-3.5 w-3.5 text-blue-600" />
+                Link this card to the phone (one-tap redemption)
+              </span>
+            </label>
+          </Field>
+
+          {/* Personal message — keep it short, hint at the ceremony. */}
+          <Field label="Message (optional)">
+            <textarea
+              placeholder="Happy birthday! 🎂"
+              rows={2}
+              value={createForm.message}
+              onChange={(e) => setCreateForm({ ...createForm, message: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              maxLength={140}
+            />
+          </Field>
+
+          {/* === More options disclosure === */}
+          <div className="border-t border-gray-200 pt-3 dark:border-gray-700">
+            <button
+              type="button"
+              onClick={() => setShowMoreOptions((v) => !v)}
+              className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {showMoreOptions ? 'Hide' : 'More'} options
+              <span className="text-[10px] font-normal text-gray-400">
+                {showMoreOptions ? '−' : '+'} design · expiry · schedule · sender · email · payment method
+              </span>
+            </button>
+
+            {showMoreOptions && (
+              <div className="mt-3 space-y-4">
+                {/* Design picker. Empty list = migration not applied; hide. */}
+                {designs.length > 0 && (
+                  <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+                    <p className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-gray-500">
+                      <Palette className="h-3 w-3" /> Design
+                    </p>
+                    <div className="mt-2 grid grid-cols-3 gap-2 md:grid-cols-6">
+                      <button
+                        type="button"
+                        onClick={() => setCreateForm({ ...createForm, design_id: '' })}
+                        className={`flex aspect-square flex-col items-center justify-center rounded-lg border text-[10px] font-semibold transition ${
+                          createForm.design_id === '' ? 'border-blue-500 ring-2 ring-blue-500/30' : 'border-gray-200 hover:border-gray-300 dark:border-gray-700'
+                        }`}
+                        aria-label="Auto-pick design"
+                      >
+                        <Sparkles className="mb-1 h-4 w-4 text-gray-400" />
+                        Auto
+                      </button>
+                      {designs.map((d) => (
+                        <DesignTile
+                          key={d.design_id}
+                          design={d}
+                          selected={createForm.design_id === String(d.design_id)}
+                          onClick={() => setCreateForm({ ...createForm, design_id: String(d.design_id) })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="Recipient name">
+                    <input
+                      placeholder="Alice"
+                      value={createForm.recipient_name}
+                      onChange={(e) => setCreateForm({ ...createForm, recipient_name: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                    />
+                  </Field>
+                  <Field label="Sender name">
+                    <input
+                      placeholder="Bob"
+                      value={createForm.sender_name}
+                      onChange={(e) => setCreateForm({ ...createForm, sender_name: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                    />
+                  </Field>
+                  <Field label="Recipient email">
+                    <input
+                      type="email"
+                      placeholder="alice@example.com"
+                      value={createForm.recipient_email}
+                      onChange={(e) => setCreateForm({ ...createForm, recipient_email: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                    />
+                  </Field>
+                  <Field label="Expires in (days)">
+                    <input
+                      type="number"
+                      min="1"
+                      max="3650"
+                      value={createForm.expires_in_days}
+                      onChange={(e) => setCreateForm({ ...createForm, expires_in_days: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Schedule delivery">
+                  <input
+                    type="datetime-local"
+                    value={createForm.deliver_at}
+                    onChange={(e) => setCreateForm({ ...createForm, deliver_at: e.target.value })}
+                    min={new Date(Date.now() + 60 * 1000).toISOString().slice(0, 16)}
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white md:max-w-[18rem]"
+                  />
+                  <p className="mt-1 text-[10px] text-gray-500">
+                    Leave blank for immediate delivery. Scheduled cards are <span className="font-semibold">pending</span> until <code className="font-mono">spark giftcards:dispatch</code> fires.
+                  </p>
+                </Field>
+
+                <Field label="Payment method (purchaser pays via)">
+                  <select
+                    value={createForm.payment_provider}
+                    onChange={(e) => setCreateForm({ ...createForm, payment_provider: e.target.value as '' | Provider })}
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                  >
+                    <option value="">— Not recorded —</option>
+                    {(Object.keys(PROVIDER_LABELS) as Provider[]).map((p) => (
+                      <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+            )}
+          </div>
 
           <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -740,11 +842,23 @@ export function GiftCardsPage() {
           </div>
 
           <div className="flex justify-end gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-            <button type="button" onClick={() => !creating && setShowCreate(false)} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+            <button
+              type="button"
+              onClick={() => {
+                if (creating) return;
+                setShowCreate(false);
+                setShowMoreOptions(false);
+              }}
+              className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+            >
               Cancel
             </button>
-            <button type="submit" disabled={creating} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">
-              {creating ? 'Issuing…' : 'Issue gift card'}
+            <button type="submit" disabled={creating} className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">
+              {creating
+                ? 'Sending…'
+                : createForm.bind_on_issue && createForm.recipient_phone
+                  ? 'Send & link'
+                  : 'Send gift'}
             </button>
           </div>
         </form>
