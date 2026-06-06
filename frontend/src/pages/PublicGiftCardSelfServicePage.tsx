@@ -15,7 +15,7 @@
  *     waiting on real MNO integration.
  */
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -44,13 +44,11 @@ import {
   TreePine,
   Trophy,
   Wand2,
-  XCircle,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import {
   giftcardBindingMock,
   type CardBinding,
-  type MnoProvider,
 } from '../lib/giftcard-bindings';
 
 interface PublicHistoryEntry {
@@ -79,12 +77,6 @@ function designIcon(name: string | null | undefined): typeof Gift {
   if (!name) return Gift;
   return DESIGN_ICONS[name] ?? Gift;
 }
-
-const PROVIDERS: Array<{ value: MnoProvider; label: string }> = [
-  { value: 'mpesa',    label: 'M-Pesa' },
-  { value: 'airtel',   label: 'Airtel Money' },
-  { value: 'mtn_momo', label: 'MTN MoMo' },
-];
 
 const ACTION_LABEL: Record<string, string> = {
   created:                'Issued',
@@ -121,8 +113,9 @@ export function PublicGiftCardSelfServicePage() {
   const [loading, setLoading] = useState(true);
   const [binding, setBinding] = useState<CardBinding | null>(null);
 
-  function refreshBinding() {
-    setBinding(giftcardBindingMock.byCode(code));
+  async function refreshBinding() {
+    const result = await giftcardBindingMock.primeByCode(code);
+    setBinding(result);
   }
 
   async function loadBalance() {
@@ -149,7 +142,7 @@ export function PublicGiftCardSelfServicePage() {
   useEffect(() => {
     if (!code) return;
     void loadBalance();
-    refreshBinding();
+    void refreshBinding();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
@@ -195,7 +188,7 @@ export function PublicGiftCardSelfServicePage() {
       </div>
 
       {/* Linked phone panel */}
-      <BindingPanel code={code} binding={binding} onChange={refreshBinding} />
+      <BindingPanel code={code} binding={binding} onChange={() => void refreshBinding()} />
 
       {/* Recent activity */}
       <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
@@ -228,12 +221,6 @@ export function PublicGiftCardSelfServicePage() {
 }
 
 function BindingPanel({ code, binding, onChange }: { code: string; binding: CardBinding | null; onChange: () => void }) {
-  const [phone, setPhone] = useState('');
-  const [provider, setProvider] = useState<MnoProvider>('mpesa');
-  const [status, setStatus] = useState<'idle' | 'awaiting' | 'failed' | 'success'>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
   if (binding) {
     return (
       <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-900/30">
@@ -253,113 +240,54 @@ function BindingPanel({ code, binding, onChange }: { code: string; binding: Card
     );
   }
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setBusy(true);
-    setStatus('awaiting');
-    try {
-      await giftcardBindingMock.bind({
-        giftcard_code: code,
-        mobile_number: phone,
-        mno_provider: provider,
-      });
-      setStatus('success');
-      onChange();
-    } catch (err) {
-      setStatus('failed');
-      setError(err instanceof Error ? err.message : 'STK push failed.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  // Per security review (blocker #2 in plan.md): customer self-service bind
+  // would let a thief make their phone the PIN gate. Bind is operator-only.
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
-        <Smartphone className="h-3.5 w-3.5" /> Link to your phone
+        <Smartphone className="h-3.5 w-3.5" /> Not linked yet
       </p>
       <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">
-        Bind this card to your number so future redemptions need your PIN. You can also pay from
-        M-Pesa / Airtel / MoMo or a PESASWAP wallet instead of the card balance.
+        This card is currently a bearer instrument — anyone with the code can redeem it.
+        Ask the merchant to link it to your phone, and future redemptions will require your PIN
+        via M-Pesa, Airtel Money, or MTN MoMo.
       </p>
-      <form onSubmit={submit} className="mt-3 space-y-3">
-        <input
-          required
-          type="tel"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="+254 7XX XXX XXX"
-          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-        />
-        <div className="grid gap-2 grid-cols-3">
-          {PROVIDERS.map((p) => (
-            <button
-              key={p.value}
-              type="button"
-              onClick={() => setProvider(p.value)}
-              className={`rounded-lg border p-2 text-xs font-semibold transition ${
-                provider === p.value
-                  ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-                  : 'border-gray-200 hover:border-gray-300 dark:border-gray-700'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        {status === 'awaiting' && (
-          <div className="flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 p-2 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-900/30 dark:text-sky-200">
-            <Loader2 className="h-4 w-4 animate-spin" /> Check your phone — enter your PIN.
-          </div>
-        )}
-        {status === 'failed' && error && (
-          <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-2 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-900/30 dark:text-rose-200">
-            <XCircle className="mt-0.5 h-4 w-4" />
-            <div>
-              <p className="font-semibold">Couldn't link</p>
-              <p>{error}</p>
-            </div>
-          </div>
-        )}
-        <button
-          type="submit"
-          disabled={busy || !phone}
-          className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
-        >
-          {busy ? 'Sending STK push…' : 'Link my phone'}
-        </button>
-      </form>
+      <p className="mt-3 text-[11px] text-gray-500">
+        We don't allow customer-side linking for security reasons — a thief could otherwise bind
+        the card to their own phone. Only the merchant who issued the card can link it.
+      </p>
     </section>
   );
 }
 
 function UnlinkButton({ code, onChange }: { code: string; onChange: () => void }) {
   const [confirming, setConfirming] = useState(false);
-  const [otpSent, setOtpSent] = useState<{ phone_last4: string; demo_code: string } | null>(null);
+  const [otpSent, setOtpSent] = useState<{ phone_last4: string; demo_code: string | null } | null>(null);
   const [otp, setOtp] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  function sendOtp() {
-    const sent = giftcardBindingMock.sendOtp({ giftcard_code: code, action: 'unbind' });
-    setOtpSent(sent);
-    setOtp(sent.demo_code);  // demo-only auto-fill
+  async function sendOtp() {
     setError(null);
+    try {
+      const sent = await giftcardBindingMock.sendOtp({ giftcard_code: code, action: 'unbind' });
+      setOtpSent({ phone_last4: sent.phone_last4, demo_code: sent.demo_code });
+      if (sent.demo_code) setOtp(sent.demo_code);  // demo-only auto-fill
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send OTP.');
+    }
   }
 
   async function confirm() {
     setError(null);
-    if (!giftcardBindingMock.verifyOtp({ giftcard_code: code, action: 'unbind', code: otp })) {
-      setError('OTP code is invalid or expired.');
-      return;
-    }
     setBusy(true);
     try {
-      await giftcardBindingMock.unbind(code);
+      await giftcardBindingMock.publicUnbind(code, otp);
       onChange();
       setConfirming(false);
       setOtpSent(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'OTP code is invalid or expired.');
     } finally {
       setBusy(false);
     }
@@ -386,14 +314,14 @@ function UnlinkButton({ code, onChange }: { code: string; onChange: () => void }
           </p>
           <div className="flex gap-2">
             <button type="button" onClick={() => setConfirming(false)} className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">Cancel</button>
-            <button type="button" onClick={sendOtp} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700">Send OTP</button>
+            <button type="button" onClick={() => void sendOtp()} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700">Send OTP</button>
           </div>
         </>
       ) : (
         <>
           <p className="text-xs text-gray-700 dark:text-gray-200">
             OTP sent to ••• {otpSent.phone_last4}.
-            <span className="ml-1 italic text-gray-500">(Demo prefilled below.)</span>
+            {otpSent.demo_code && <span className="ml-1 italic text-gray-500">(Demo prefilled below.)</span>}
           </p>
           <input
             value={otp}
@@ -415,41 +343,36 @@ function UnlinkButton({ code, onChange }: { code: string; onChange: () => void }
 
 function DangerZone({ code, binding, onDisabled }: { code: string; binding: CardBinding | null; onDisabled: () => void }) {
   const [showing, setShowing] = useState(false);
-  const [otpSent, setOtpSent] = useState<{ phone_last4: string; demo_code: string } | null>(null);
+  const [otpSent, setOtpSent] = useState<{ phone_last4: string; demo_code: string | null } | null>(null);
   const [otp, setOtp] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
 
-  function sendOtp() {
+  async function sendOtp() {
     if (!binding) {
       setError('Disable requires the card to be linked to a phone first.');
       return;
     }
-    const sent = giftcardBindingMock.sendOtp({ giftcard_code: code, action: 'disable' });
-    setOtpSent(sent);
-    setOtp(sent.demo_code);
     setError(null);
+    try {
+      const sent = await giftcardBindingMock.sendOtp({ giftcard_code: code, action: 'disable' });
+      setOtpSent({ phone_last4: sent.phone_last4, demo_code: sent.demo_code });
+      if (sent.demo_code) setOtp(sent.demo_code);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send OTP.');
+    }
   }
 
   async function confirm() {
     setError(null);
-    if (!giftcardBindingMock.verifyOtp({ giftcard_code: code, action: 'disable', code: otp })) {
-      setError('OTP code is invalid or expired.');
-      return;
-    }
     setBusy(true);
     try {
-      try {
-        await api.giftcards.delete(0);
-      } catch {
-        // Backend disable is by id, not code, and we don't have the id here.
-        // In a real release we'd add /api/public/giftcards/:code/disable.
-        // For this UI-only slice we surface success in the UX and let the
-        // real backend call land in a follow-up commit.
-      }
+      await giftcardBindingMock.publicDisable(code, otp);
       setDone(true);
       onDisabled();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'OTP code is invalid or expired.');
     } finally {
       setBusy(false);
     }
@@ -486,7 +409,7 @@ function DangerZone({ code, binding, onDisabled }: { code: string; binding: Card
               </p>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setShowing(false)} className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">Cancel</button>
-                <button type="button" onClick={sendOtp} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-rose-700">Send OTP</button>
+                <button type="button" onClick={() => void sendOtp()} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-rose-700">Send OTP</button>
               </div>
               {error && <p className="text-xs text-rose-600">{error}</p>}
             </>
@@ -494,7 +417,7 @@ function DangerZone({ code, binding, onDisabled }: { code: string; binding: Card
             <>
               <p className="text-xs text-gray-800 dark:text-gray-200">
                 OTP sent to ••• {otpSent.phone_last4}.
-                <span className="ml-1 italic text-gray-500">(Demo prefilled.)</span>
+                {otpSent.demo_code && <span className="ml-1 italic text-gray-500">(Demo prefilled.)</span>}
               </p>
               <input
                 value={otp}

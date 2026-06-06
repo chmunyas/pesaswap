@@ -371,7 +371,20 @@ export function GiftCardsPage() {
     try {
       const res = await api.giftcards.list(1, 100, search, statusFilter);
       const list = Array.isArray(res.data?.giftcards) ? res.data!.giftcards : [];
-      setCards(list.map((c) => normalizeGiftCard(c as Record<string, unknown>)));
+      const normalized = list.map((c) => normalizeGiftCard(c as Record<string, unknown>));
+      setCards(normalized);
+      // Hydrate the adapter cache from the card payloads (each card now
+      // includes its `active_binding` thanks to the backend decorate() helper).
+      const cardsForPrime = list.map((raw) => {
+        const r = raw as Record<string, unknown>;
+        return {
+          giftcard_id: Number(r.giftcard_id ?? 0),
+          giftcard_number: String(r.giftcard_number ?? ''),
+          active_binding: (r.active_binding as Record<string, unknown> | null | undefined) ?? null,
+        };
+      });
+      giftcardBindingMock.primeMany(cardsForPrime);
+      refreshBindings();
       const s = res.data?.stats as Stats | undefined;
       if (s) setStats(s);
     } catch {

@@ -930,8 +930,35 @@ class GiftcardsController extends BaseApiController
         $row['delivered_at'] = $row['delivered_at'] ?? null;
         $row['denomination'] = $this->extractDenominationSnapshot($row);
         $row['pending_transfer'] = $this->fetchPendingTransferSummary((int)$row['giftcard_id']);
+        $row['active_binding'] = $this->fetchActiveBindingSummary((int)$row['giftcard_id']);
 
         return $row;
+    }
+
+    /**
+     * Returns the active binding summary for a card (or null). Surfaced
+     * inline on the card payload so the admin frontend doesn't need an
+     * extra round-trip per row.
+     */
+    private function fetchActiveBindingSummary(int $giftcardId): ?array
+    {
+        if (!$this->db->tableExists('giftcard_bindings')) return null;
+        $row = $this->db->table('giftcard_bindings')
+            ->where('giftcard_id', $giftcardId)
+            ->where('status', 'active')
+            ->where('deleted', 0)
+            ->limit(1)
+            ->get()
+            ->getRowArray();
+        if ($row === null) return null;
+        return [
+            'binding_id' => (int)$row['binding_id'],
+            'mno_provider' => (string)$row['mno_provider'],
+            'mobile_number' => (string)$row['mobile_number'],
+            'masked_phone' => $this->maskPhoneServer((string)$row['mobile_number']),
+            'bound_at' => $row['bound_at'],
+            'last_used_at' => $row['last_used_at'],
+        ];
     }
 
     private function computeStatus(array $row): string

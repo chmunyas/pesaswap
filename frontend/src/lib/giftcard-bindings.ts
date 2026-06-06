@@ -1,26 +1,22 @@
 /**
- * Gift-card binding + tender + intent mock library.
+ * Gift-card binding + payment-intent client. Talks to the real backend
+ * shipped in commit 5169ba535 (Phase 6).
  *
- * Pure client-side mock that simulates the real backend flows we'll build
- * later (`giftcard_bindings`, `giftcard_payment_intents`, MNO webhooks).
- * Backed by localStorage under the `pesaswap.giftcard.*` namespace so the
- * demo survives page reloads.
+ * Replaces the localStorage mock that shipped in c51cebcb1. The public
+ * surface intentionally preserves the mock's sync getters (byCode, list,
+ * intents, walletFor, mnoLabel, maskPhone) so the existing BindModal,
+ * TenderPicker, GiftCardTenderDemoPage and PublicGiftCardSelfServicePage
+ * keep working unchanged. Sync getters read from an in-memory cache that
+ * the parent component populates via `prime()` BEFORE rendering the
+ * consuming component (this is the hydration-cache pattern called out in
+ * the rubber-duck blocker #1 — see plan.md).
  *
- * Pattern matches frontend/src/lib/coop-bnpl.ts and frontend/src/lib/walkout.ts —
- * the cashier UX is fully demo-able today, and swapping the mock for a real
- * API client is a single file change.
+ * Async actions (bind, unbind, createIntent, cancelIntent, sendOtp,
+ * publicUnbind, publicDisable) call the API directly and update the cache
+ * on return.
  */
 
-const BINDINGS_KEY = 'pesaswap.giftcard.bindings';
-const INTENTS_KEY = 'pesaswap.giftcard.intents';
-const WALLETS_KEY = 'pesaswap.giftcard.wallets';
-const OTP_KEY = 'pesaswap.giftcard.otp';
-
-// Lift the % up if you want fewer demo failures.
-const STK_SUCCESS_RATE = 0.92;
-// Pretend the MNO callback arrives between these bounds (ms).
-const STK_MIN_LATENCY_MS = 1500;
-const STK_MAX_LATENCY_MS = 3500;
+import { api } from './api';
 
 export type MnoProvider = 'mpesa' | 'airtel' | 'mtn_momo';
 
@@ -37,11 +33,11 @@ export type TenderSource =
 export type BindingStatus = 'pending' | 'active' | 'disabled';
 
 export interface CardBinding {
-  giftcard_code: string;
+  giftcard_code: string;     // legacy mock field — populated from giftcard_number
   mobile_number: string;
   mno_provider: MnoProvider;
   status: BindingStatus;
-  bound_at: string;
+  bound_at: string | null;
   last_used_at: string | null;
   pin_attempts: number;
 }
@@ -56,7 +52,7 @@ export type IntentStatus =
   | 'expired';
 
 export interface PaymentIntent {
-  intent_id: string;
+  intent_id: string;          // string for backwards-compat with mock — server returns int
   giftcard_code: string | null;
   amount: number;
   currency: string;
@@ -76,49 +72,20 @@ export interface PesaswapWallet {
   currency: string;
 }
 
-interface OtpRecord {
-  giftcard_code: string;
-  action: 'unbind' | 'disable';
-  code: string;
-  expires_at: number;
+// ---------- internal cache ----------
+
+interface CachedCard {
+  giftcard_id: number;
+  binding: CardBinding | null;
 }
 
-// ---------- low-level localStorage I/O ----------
+// Keyed by uppercase giftcard_number.
+const cache = new Map<string, CachedCard>();
+// Most-recent intents keyed by intent_id (string).
+const intentCache = new Map<string, PaymentIntent>();
 
-function load<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function save<T>(key: string, value: T): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // localStorage may be full or disabled (Safari private mode) — silently fail.
-  }
-}
-
-function rand<T>(arr: readonly T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function randomLatencyMs(): number {
-  return STK_MIN_LATENCY_MS + Math.floor(Math.random() * (STK_MAX_LATENCY_MS - STK_MIN_LATENCY_MS));
-}
-
-function newId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function maskPhone(phone: string): string {
-  const digits = phone.replace(/\D/g, '');
-  if (digits.length < 4) return phone;
-  return `+${digits.slice(0, -7).padEnd(3, '*')} ••• ${digits.slice(-4)}`;
+function normalizeCode(code: string): string {
+  return code.toUpperCase().trim();
 }
 
 function mnoLabel(provider: MnoProvider): string {
@@ -127,83 +94,143 @@ function mnoLabel(provider: MnoProvider): string {
   return 'MTN MoMo';
 }
 
+function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 4) return phone;
+  return `+${digits.slice(0, -7).padEnd(3, '*')} ••• ${digits.slice(-4)}`;
+}
+
+function bindingFromServer(raw: Record<string, unknown>, code: string): CardBinding {
+  return {
+    giftcard_code: code,
+    mobile_number: String(raw.mobile_number ?? ''),
+    mno_provider: (String(raw.mno_provider ?? 'mpesa') as MnoProvider),
+    status: (String(raw.status ?? 'active') as BindingStatus),
+    bound_at: (raw.bound_at as string | null) ?? null,
+    last_used_at: (raw.last_used_at as string | null) ?? null,
+    pin_attempts: Number(raw.pin_attempts ?? 0),
+  };
+}
+
+function intentFromServer(raw: Record<string, unknown>, code: string | null): PaymentIntent {
+  return {
+    intent_id: String(raw.intent_id ?? ''),
+    giftcard_code: code,
+    amount: Number(raw.amount ?? 0),
+    currency: String(raw.currency ?? 'KES'),
+    source: (String(raw.source ?? 'card_balance') as TenderSource),
+    status: (String(raw.status ?? 'pending') as IntentStatus),
+    mno_request_id: (raw.mno_request_id as string | null) ?? null,
+    mno_txn_ref: (raw.mno_txn_ref as string | null) ?? null,
+    failure_code: (raw.failure_code as string | null) ?? null,
+    failure_reason: (raw.failure_reason as string | null) ?? null,
+    created_at: String(raw.created_at ?? new Date().toISOString()),
+    completed_at: (raw.completed_at as string | null) ?? null,
+  };
+}
+
 // ---------- public API ----------
 
-export const giftcardBindingMock = {
-  // ----- bindings -----
-  list(): CardBinding[] {
-    return load<CardBinding[]>(BINDINGS_KEY, []);
-  },
-
-  byCode(code: string): CardBinding | null {
-    const all = this.list();
-    const upper = code.toUpperCase();
-    return all.find((b) => b.giftcard_code === upper && b.status === 'active') ?? null;
+export const giftcardBindings = {
+  /** Reset everything — call on logout or test teardown. */
+  reset(): void {
+    cache.clear();
+    intentCache.clear();
   },
 
   /**
-   * Cashier-initiated binding. Returns a Promise that resolves when the
-   * mocked STK push callback comes back. Throws on PIN decline / timeout.
+   * Hydrate the cache from a giftcard payload that may include
+   * `active_binding` (decorated by the backend's `decorate()` method since
+   * commit 5169ba535's follow-up). Call this BEFORE rendering any consumer
+   * that reads byCode().
    */
-  async bind(args: {
-    giftcard_code: string;
-    mobile_number: string;
-    mno_provider: MnoProvider;
-  }): Promise<CardBinding> {
-    const code = args.giftcard_code.toUpperCase();
-    const phone = args.mobile_number.replace(/\s+/g, '');
-    if (!/^\+?\d{9,15}$/.test(phone)) {
-      throw new Error('Mobile number must be 9-15 digits, optionally with leading +.');
+  prime(card: { giftcard_id: number; giftcard_number: string; active_binding?: Record<string, unknown> | null }): void {
+    const code = normalizeCode(card.giftcard_number);
+    const binding = card.active_binding ? bindingFromServer(card.active_binding, code) : null;
+    cache.set(code, { giftcard_id: card.giftcard_id, binding });
+  },
+
+  /** Convenience for an array of cards — used by GiftCardsPage.refreshBindings(). */
+  primeMany(cards: Array<{ giftcard_id: number; giftcard_number: string; active_binding?: Record<string, unknown> | null }>): void {
+    for (const c of cards) this.prime(c);
+  },
+
+  /** Public-portal hydration by code. Returns the binding (or null). */
+  async primeByCode(code: string): Promise<CardBinding | null> {
+    try {
+      const res = await api.giftcards.publicBinding(code);
+      const raw = res.data?.binding;
+      const normalized = normalizeCode(code);
+      if (!raw) {
+        // We don't get giftcard_id from the public endpoint (intentional —
+        // PII reduction). Record null binding without id.
+        cache.set(normalized, { giftcard_id: -1, binding: null });
+        return null;
+      }
+      const binding = bindingFromServer(raw as Record<string, unknown>, normalized);
+      cache.set(normalized, { giftcard_id: -1, binding });
+      return binding;
+    } catch {
+      return null;
     }
-    // Persist a 'pending' record so the UI can show the in-flight state
-    // even if the user refreshes mid-flow.
-    const pending: CardBinding = {
-      giftcard_code: code,
-      mobile_number: phone,
+  },
+
+  // ----- sync getters (cache-backed) -----
+  byCode(code: string): CardBinding | null {
+    return cache.get(normalizeCode(code))?.binding ?? null;
+  },
+
+  list(): CardBinding[] {
+    return Array.from(cache.values()).map((c) => c.binding).filter((b): b is CardBinding => b !== null);
+  },
+
+  intents(): PaymentIntent[] {
+    return Array.from(intentCache.values()).slice(0, 50);
+  },
+
+  /**
+   * PESASWAP wallet stub. Real wallet API is a follow-up; for now report
+   * a zero balance (the TenderPicker correctly greys out the row when
+   * balance < amount, so the demo continues to render gracefully).
+   */
+  walletFor(customerEmail: string | null | undefined, currency = 'KES'): PesaswapWallet {
+    return { customer_email: customerEmail ?? '', balance: 0, currency };
+  },
+
+  // ----- async actions: admin -----
+  async bind(args: { giftcard_code: string; mobile_number: string; mno_provider: MnoProvider }): Promise<CardBinding> {
+    const code = normalizeCode(args.giftcard_code);
+    const cached = cache.get(code);
+    if (!cached || cached.giftcard_id <= 0) {
+      throw new Error('Card must be primed (call prime() with the card object first).');
+    }
+    const res = await api.giftcards.bind(cached.giftcard_id, {
+      mobile_number: args.mobile_number,
       mno_provider: args.mno_provider,
-      status: 'pending',
-      bound_at: new Date().toISOString(),
-      last_used_at: null,
-      pin_attempts: 0,
-    };
-    const upserted = upsertBinding(pending);
-
-    await sleep(randomLatencyMs());
-
-    // 90%+ success in demo; otherwise emit a realistic MNO failure mode.
-    if (Math.random() > STK_SUCCESS_RATE) {
-      upserted.pin_attempts++;
-      upserted.status = 'pending';  // keep, so the user can retry
-      saveBindings(replaceBinding(upserted));
-      const reason = rand(['PIN_DECLINED', 'TIMEOUT', 'NO_NETWORK'] as const);
-      throw new Error(
-        reason === 'PIN_DECLINED' ? 'Customer declined the PIN prompt.' :
-        reason === 'TIMEOUT'      ? 'STK push timed out — phone may be offline.' :
-                                    'Phone reported no network signal.',
-      );
-    }
-
-    upserted.status = 'active';
-    saveBindings(replaceBinding(upserted));
-    return upserted;
+    });
+    const raw = (res.data as Record<string, unknown> | undefined)?.binding as Record<string, unknown> | undefined;
+    if (!raw) throw new Error('Binding response missing.');
+    const binding = bindingFromServer(raw, code);
+    cache.set(code, { giftcard_id: cached.giftcard_id, binding });
+    return binding;
   },
 
   async unbind(code: string): Promise<void> {
-    const upper = code.toUpperCase();
-    const all = this.list().map((b) =>
-      b.giftcard_code === upper ? { ...b, status: 'disabled' as BindingStatus } : b,
-    );
-    saveBindings(all);
-  },
-
-  // ----- payment intents -----
-  intents(): PaymentIntent[] {
-    return load<PaymentIntent[]>(INTENTS_KEY, []);
+    const normalized = normalizeCode(code);
+    const cached = cache.get(normalized);
+    if (!cached || cached.giftcard_id <= 0) {
+      throw new Error('Card must be primed before unbind.');
+    }
+    await api.giftcards.unbind(cached.giftcard_id);
+    cache.set(normalized, { giftcard_id: cached.giftcard_id, binding: null });
   },
 
   /**
-   * Create an intent + start the mocked authorisation flow. The Promise
-   * resolves with the final intent (completed/failed/cancelled).
+   * Create a payment intent. For synchronous sources (card_balance,
+   * pesaswap_wallet) the returned intent will already be 'completed'.
+   * For MNO/Co-op sources the intent comes back 'awaiting_pin' and the
+   * caller should poll showIntent() (or rely on the backend's dev-mode
+   * auto-callback that completes the intent in ~2s).
    */
   async createIntent(args: {
     giftcard_code?: string | null;
@@ -212,162 +239,96 @@ export const giftcardBindingMock = {
     source: TenderSource;
     onStatusChange?: (intent: PaymentIntent) => void;
   }): Promise<PaymentIntent> {
-    if (!Number.isFinite(args.amount) || args.amount <= 0) {
-      throw new Error('Amount must be positive.');
+    if (!args.giftcard_code) {
+      throw new Error('Intent creation without a card is not supported in v1.');
     }
-
-    const intent: PaymentIntent = {
-      intent_id: newId('intent'),
-      giftcard_code: args.giftcard_code?.toUpperCase() ?? null,
+    const code = normalizeCode(args.giftcard_code);
+    const cached = cache.get(code);
+    if (!cached || cached.giftcard_id <= 0) {
+      throw new Error('Card must be primed before createIntent.');
+    }
+    const res = await api.giftcards.createIntent(cached.giftcard_id, {
       amount: args.amount,
       currency: args.currency,
       source: args.source,
-      status: 'pending',
-      mno_request_id: null,
-      mno_txn_ref: null,
-      failure_code: null,
-      failure_reason: null,
-      created_at: new Date().toISOString(),
-      completed_at: null,
-    };
-    saveIntent(intent);
+    });
+    const raw = res.data?.intent as Record<string, unknown> | undefined;
+    if (!raw) throw new Error('Intent response missing.');
+    let intent = intentFromServer(raw, code);
+    intentCache.set(intent.intent_id, intent);
     args.onStatusChange?.(intent);
 
-    // Card balance + wallet sources skip the PIN step (no STK push).
-    const needsPin =
-      args.source === 'mpesa' ||
-      args.source === 'airtel' ||
-      args.source === 'mtn_momo' ||
-      args.source === 'coop_bank' ||
-      args.source === 'coop_bnpl';
-
-    if (needsPin) {
-      intent.status = 'awaiting_pin';
-      intent.mno_request_id = newId('mno_req');
-      saveIntent(intent);
-      args.onStatusChange?.(intent);
-      await sleep(randomLatencyMs());
-    } else {
-      // wallet/balance-style sources just take a moment to "settle"
-      await sleep(600);
+    // For async sources we poll a few times so the TenderPicker sees the
+    // transition without manual refresh. Dev-mode backend auto-completes
+    // within ~50ms, so 2-3 polls is enough.
+    if (intent.status === 'awaiting_pin' || intent.status === 'pending') {
+      for (let i = 0; i < 5; i++) {
+        await sleep(800);
+        try {
+          const poll = await api.giftcards.showIntent(cached.giftcard_id, Number(intent.intent_id));
+          const polled = poll.data?.intent as Record<string, unknown> | undefined;
+          if (polled) {
+            intent = intentFromServer(polled, code);
+            intentCache.set(intent.intent_id, intent);
+            args.onStatusChange?.(intent);
+            if (intent.status === 'completed' || intent.status === 'failed' || intent.status === 'cancelled' || intent.status === 'expired') {
+              break;
+            }
+          }
+        } catch {
+          break;
+        }
+      }
     }
-
-    // Decide success/fail
-    const succeeds = Math.random() <= STK_SUCCESS_RATE;
-    if (!succeeds) {
-      intent.status = 'failed';
-      const failureCode = rand([
-        'PIN_DECLINED', 'INSUFFICIENT_FUNDS', 'TIMEOUT', 'CUSTOMER_CANCELLED',
-      ] as const);
-      intent.failure_code = failureCode;
-      intent.failure_reason =
-        failureCode === 'PIN_DECLINED'        ? 'Customer declined the PIN prompt.' :
-        failureCode === 'INSUFFICIENT_FUNDS'  ? 'Source had insufficient funds.' :
-        failureCode === 'TIMEOUT'             ? 'No response within 60s.' :
-                                                'Customer cancelled the payment.';
-      intent.completed_at = new Date().toISOString();
-      saveIntent(intent);
-      args.onStatusChange?.(intent);
-      return intent;
-    }
-
-    intent.status = 'completed';
-    intent.mno_txn_ref = newId('MNO').replace('intent_', '').toUpperCase();
-    intent.completed_at = new Date().toISOString();
-    saveIntent(intent);
-    args.onStatusChange?.(intent);
-
-    // Bump the binding's last_used_at on a successful MNO debit.
-    if (intent.giftcard_code) {
-      const all = giftcardBindingMock.list();
-      const updated = all.map((b) =>
-        b.giftcard_code === intent.giftcard_code && b.status === 'active'
-          ? { ...b, last_used_at: intent.completed_at }
-          : b,
-      );
-      saveBindings(updated);
-    }
-
     return intent;
   },
 
   async cancelIntent(intentId: string): Promise<void> {
-    const list = this.intents();
-    const updated = list.map((i) =>
-      i.intent_id === intentId && (i.status === 'pending' || i.status === 'awaiting_pin')
-        ? { ...i, status: 'cancelled' as IntentStatus, completed_at: new Date().toISOString() }
-        : i,
-    );
-    save(INTENTS_KEY, updated);
+    const intent = intentCache.get(intentId);
+    if (!intent || !intent.giftcard_code) return;
+    const cached = cache.get(intent.giftcard_code);
+    if (!cached || cached.giftcard_id <= 0) return;
+    await api.giftcards.cancelIntent(cached.giftcard_id, Number(intentId));
+    intent.status = 'cancelled';
+    intent.completed_at = new Date().toISOString();
+    intentCache.set(intentId, intent);
   },
 
-  // ----- PESASWAP wallet (mock) -----
-  walletFor(customerEmail: string | null | undefined, currency: string = 'KES'): PesaswapWallet {
-    if (!customerEmail) return { customer_email: '', balance: 0, currency };
-    const all = load<PesaswapWallet[]>(WALLETS_KEY, []);
-    const existing = all.find((w) => w.customer_email === customerEmail);
-    if (existing) return existing;
-    // Bootstrap a demo wallet with a small balance so the option is selectable.
-    const fresh: PesaswapWallet = { customer_email: customerEmail, balance: 3500, currency };
-    save(WALLETS_KEY, [...all, fresh]);
-    return fresh;
-  },
-
-  // ----- self-service OTP -----
-  sendOtp(args: { giftcard_code: string; action: OtpRecord['action'] }): { phone_last4: string; demo_code: string } {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    const record: OtpRecord = {
-      giftcard_code: args.giftcard_code.toUpperCase(),
-      action: args.action,
-      code,
-      expires_at: Date.now() + 5 * 60 * 1000,
+  // ----- async actions: public self-service -----
+  /** Send a 6-digit OTP to the bound phone for an unbind or disable action. */
+  async sendOtp(args: { giftcard_code: string; action: 'unbind' | 'disable' }): Promise<{ phone_last4: string; demo_code: string | null; expires_at: string | null }> {
+    const res = await api.giftcards.publicSendOtp(args.giftcard_code, args.action);
+    const data = res.data as Record<string, unknown> | undefined;
+    const maskedPhone = String(data?.masked_phone ?? '');
+    const phone_last4 = maskedPhone.slice(-4) || '????';
+    return {
+      phone_last4,
+      demo_code: (data?.demo_code as string | null) ?? null,
+      expires_at: (data?.expires_at as string | null) ?? null,
     };
-    save(OTP_KEY, record);
-    const binding = giftcardBindingMock.byCode(args.giftcard_code);
-    const last4 = binding ? binding.mobile_number.slice(-4) : '????';
-    // Returns the code inline because this is a demo — a real backend never
-    // would. The UI prefills it so the demo flow is single-tap-completable.
-    return { phone_last4: last4, demo_code: code };
   },
 
-  verifyOtp(args: { giftcard_code: string; action: OtpRecord['action']; code: string }): boolean {
-    const record = load<OtpRecord | null>(OTP_KEY, null);
-    if (!record) return false;
-    if (record.giftcard_code !== args.giftcard_code.toUpperCase()) return false;
-    if (record.action !== args.action) return false;
-    if (record.expires_at < Date.now()) return false;
-    return record.code === args.code;
+  /** OTP-gated customer unbind. Returns true on success. */
+  async publicUnbind(code: string, otp: string): Promise<void> {
+    await api.giftcards.publicUnbind(code, otp);
+    cache.delete(normalizeCode(code));
   },
 
-  // ----- helpers re-exported for the UI -----
+  /** OTP-gated customer disable (freeze the card). */
+  async publicDisable(code: string, otp: string): Promise<void> {
+    await api.giftcards.publicDisable(code, otp);
+    cache.delete(normalizeCode(code));
+  },
+
+  // ----- pure helpers re-exported for the UI -----
   maskPhone,
   mnoLabel,
 };
 
-// ---------- internal helpers ----------
+// Back-compat alias — existing components import { giftcardBindingMock }.
+// New code should use { giftcardBindings } above.
+export const giftcardBindingMock = giftcardBindings;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function saveBindings(value: CardBinding[]): void {
-  save(BINDINGS_KEY, value);
-}
-
-function upsertBinding(b: CardBinding): CardBinding {
-  const all = giftcardBindingMock.list();
-  const others = all.filter((x) => x.giftcard_code !== b.giftcard_code);
-  saveBindings([b, ...others]);
-  return b;
-}
-
-function replaceBinding(b: CardBinding): CardBinding[] {
-  const all = giftcardBindingMock.list();
-  return all.map((x) => (x.giftcard_code === b.giftcard_code ? b : x));
-}
-
-function saveIntent(i: PaymentIntent): void {
-  const all = giftcardBindingMock.intents();
-  const others = all.filter((x) => x.intent_id !== i.intent_id);
-  save(INTENTS_KEY, [i, ...others].slice(0, 50));  // cap at 50 so it doesn't grow unbounded
 }

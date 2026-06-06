@@ -98,6 +98,36 @@ const giftCardEndpoints = {
     update: (id: number, data: ApiData) => request<ApiResponse<EntityPayload>>(`/giftcard-denominations/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: number) => request<ApiResponse>(`/giftcard-denominations/${id}`, { method: 'DELETE' }),
   },
+  // NFC binding + payment intents + customer self-service (Phase 6)
+  bind: (id: number, data: ApiData) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/bind`, { method: 'POST', body: JSON.stringify(data) }),
+  unbind: (id: number) =>
+    request<ApiResponse<EntityPayload>>(`/giftcards/${id}/bind`, { method: 'DELETE' }),
+  bindings: (id: number) =>
+    request<ApiResponse<{ bindings?: EntityPayload[] }>>(`/giftcards/${id}/bindings`),
+  createIntent: (id: number, data: ApiData) =>
+    request<ApiResponse<{ intent?: EntityPayload }>>(`/giftcards/${id}/payment-intent`, { method: 'POST', body: JSON.stringify(data) }),
+  showIntent: (id: number, intentId: number) =>
+    request<ApiResponse<{ intent?: EntityPayload }>>(`/giftcards/${id}/payment-intent/${intentId}`),
+  cancelIntent: (id: number, intentId: number) =>
+    request<ApiResponse<{ intent?: EntityPayload }>>(`/giftcards/${id}/payment-intent/${intentId}/cancel`, { method: 'POST' }),
+  publicBinding: (code: string) =>
+    request<ApiResponse<{ binding?: EntityPayload | null }>>(`/public/giftcards/${encodeURIComponent(code)}/binding`),
+  publicSendOtp: (code: string, action: 'unbind' | 'disable') =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/${encodeURIComponent(code)}/binding/otp`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+  publicUnbind: (code: string, otp: string) =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/${encodeURIComponent(code)}/binding`, {
+      method: 'DELETE',
+      body: JSON.stringify({ otp }),
+    }),
+  publicDisable: (code: string, otp: string) =>
+    request<ApiResponse<EntityPayload>>(`/public/giftcards/${encodeURIComponent(code)}/disable`, {
+      method: 'POST',
+      body: JSON.stringify({ otp }),
+    }),
 };
 
 const expenseEndpoints = {
