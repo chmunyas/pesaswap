@@ -53,6 +53,12 @@ class TicketsRetryDeliveries extends BaseCommand
         $minAge     = max(0, min($minAge, 1440));
         $limit      = max(1, min($limit, 1000));
 
+        // Install signal handler so a SIGTERM mid-batch lets the current
+        // row finish before we break out (rather than killing the worker
+        // halfway through an SMTP send and leaving status='queued' with
+        // an off-by-one attempts counter).
+        $shutdown = \App\Libraries\Graceful_shutdown::install();
+
         $summary = [
             'considered' => 0,
             'sent'       => 0,
@@ -101,6 +107,12 @@ class TicketsRetryDeliveries extends BaseCommand
 
             $lib = service('ticket_delivery_lib');
             foreach ($rows as $row) {
+                if ($shutdown->isStopping()) {
+                    CLI::write('Shutdown signalled — stopping after ' . (
+                        $summary['sent'] + $summary['failed'] + $summary['bounced'] + $summary['skipped'] + $summary['errors']
+                    ) . ' of ' . $summary['considered'] . ' rows.', 'yellow');
+                    break;
+                }
                 try {
                     $result = $lib->retryRow((int) $row['delivery_id']);
                     $status = (string) ($result['status'] ?? 'unknown');

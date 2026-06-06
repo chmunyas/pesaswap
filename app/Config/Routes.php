@@ -189,6 +189,8 @@ $routes->group('api', static function ($routes) {
     $routes->get('admin/audit-log', 'Api\TicketsController::auditLogIndex');
     // Prometheus metrics (ent-metrics-prometheus)
     $routes->get('metrics', 'Api\MetricsController::scrape');
+    // Health + readiness (ent-graceful-shutdown)
+    $routes->get('health', 'Api\HealthController::check');
 
     // Tickets — Phase 5: promos + bundles + seat holds + reports
     $routes->get('ticket-promos', 'Api\TicketsController::promoIndex');
@@ -221,6 +223,9 @@ $routes->group('api', static function ($routes) {
     // My Gifts — OTP-gated roll-up by phone (Slice E.2)
     $routes->post('public/giftcards/by-phone/send-otp', 'Api\PublicController::giftcardListByPhoneSendOtp');
     $routes->post('public/giftcards/by-phone/verify', 'Api\PublicController::giftcardListByPhoneVerify');
+    // Sender re-gift — OTP-gated public transfer from /g/:code (Slice E.3)
+    $routes->post('public/giftcards/(:segment)/transfer/send-otp', 'Api\PublicController::giftcardTransferSendOtp/$1');
+    $routes->post('public/giftcards/(:segment)/transfer/confirm', 'Api\PublicController::giftcardTransferConfirm/$1');
     $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
     $routes->post('public/tickets/(:segment)/transfer/request', 'Api\PublicController::ticketTransferRequest/$1');
     $routes->post('public/tickets/(:segment)/transfer/confirm', 'Api\PublicController::ticketTransferConfirm/$1');

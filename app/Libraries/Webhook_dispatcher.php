@@ -110,11 +110,20 @@ class Webhook_dispatcher
      * Picks up queued+failed deliveries whose next_attempt_at <= NOW()
      * and POSTs them. Returns a counts summary suitable for spark output.
      *
+     * Respects graceful shutdown — if the optional \\App\\Libraries\\Graceful_shutdown
+     * helper has been installed and signals a stop mid-batch, breaks out
+     * after the current row finishes so the next process can drain the
+     * remainder. (Each row is its own transactional unit, so partial
+     * progress is safe.)
+     *
      * @return array{considered:int,sent:int,failed:int,bounced:int,errors:int}
      */
     public function dispatchPending(int $limit = 100): array
     {
         $summary = ['considered' => 0, 'sent' => 0, 'failed' => 0, 'bounced' => 0, 'errors' => 0];
+        $shutdown = class_exists(\App\Libraries\Graceful_shutdown::class)
+            ? \App\Libraries\Graceful_shutdown::install()
+            : null;
 
         try {
             $db = Database::connect();
@@ -134,6 +143,9 @@ class Webhook_dispatcher
             $summary['considered'] = count($rows);
 
             foreach ($rows as $row) {
+                if ($shutdown !== null && $shutdown->isStopping()) {
+                    break;
+                }
                 try {
                     $outcome = $this->deliverOne($db, $row);
                     $summary[$outcome]++;
