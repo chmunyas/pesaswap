@@ -646,6 +646,17 @@ class GiftcardsController extends BaseApiController
                 );
             }
 
+            // In-flight payment intent freeze. createIntent() bypasses this
+            // helper (it locks the row and calls applyBalanceChangeLocked
+            // directly) so it never deadlocks with its own intent.
+            if ($this->hasInFlightIntentUnderLock($id)) {
+                $this->db->transComplete();
+                return $this->respondError(
+                    'A payment is currently being authorised on this card. Cancel or complete it first.',
+                    409,
+                );
+            }
+
             $result = $compute($body, $row);
             if (isset($result['error'])) {
                 $this->db->transComplete();
@@ -832,6 +843,20 @@ class GiftcardsController extends BaseApiController
             && $this->db->tableExists('giftcard_transfers')
             && $this->hasField('giftcards', 'design_id')
             && $this->hasField('giftcards', 'delivery_status');
+    }
+
+    /**
+     * True when the Phase 6 migration (bindings, payment intents, wallets,
+     * OTPs) has been applied. Endpoints in the bind/intent/self-service
+     * surface gate on this and return 503 when not migrated.
+     */
+    private function bindingsApplied(): bool
+    {
+        return $this->modernizationApplied()
+            && $this->db->tableExists('giftcard_bindings')
+            && $this->db->tableExists('giftcard_payment_intents')
+            && $this->db->tableExists('pesaswap_wallets')
+            && $this->db->tableExists('giftcard_otps');
     }
 
     private function buildGiftcardSelect(): array
@@ -2001,5 +2026,908 @@ class GiftcardsController extends BaseApiController
             log_message('warning', 'GiftcardsController::publicTransferRateLimit — ' . $e->getMessage());
             return false;
         }
+    }
+
+    // ============================================================
+    // Phase 6 — NFC bindings, payment intents, customer self-service
+    // ============================================================
+
+    private const BIND_TTL_MIN = 15;
+    private const INTENT_TTL_SEC = 60;
+    private const OTP_TTL_MIN = 5;
+    private const PUBLIC_OTP_RATE = 5;       // per minute per IP
+    private const PUBLIC_DISABLE_RATE = 3;   // per minute per IP
+
+    private const ALLOWED_MNO = ['mpesa', 'airtel', 'mtn_momo'];
+    private const ALLOWED_INTENT_SOURCES = [
+        'card_balance', 'mpesa', 'airtel', 'mtn_momo',
+        'pesaswap_wallet', 'coop_bank', 'coop_bnpl', 'split',
+    ];
+    private const SYNC_SOURCES = ['card_balance', 'pesaswap_wallet'];
+
+    // ---------- Bindings (operator-initiated) ----------
+
+    public function bindingIndex(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) return $auth;
+        if (!$this->bindingsApplied()) return $this->respondSuccess(['bindings' => []]);
+        if ($this->fetchGiftcard($id) === null) return $this->respondError('Gift card not found.', 404);
+        $rows = $this->db->table('giftcard_bindings')
+            ->where('giftcard_id', $id)
+            ->where('deleted', 0)
+            ->orderBy('created_at', 'DESC')
+            ->limit(20)
+            ->get()
+            ->getResultArray();
+        return $this->respondSuccess([
+            'bindings' => array_map([$this, 'decorateBinding'], $rows),
+        ]);
+    }
+
+    /**
+     * Operator-initiated bind. Customer authorises via STK push to the
+     * provided mobile number. We persist the binding as 'pending' with an
+     * expires_at; a real MNO callback (or the mocked dev-mode auto-confirm
+     * step below) flips it to 'active'.
+     */
+    public function bind(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) return $auth;
+        if (!$this->bindingsApplied()) {
+            return $this->respondError('Gift card bindings migration is required.', 503);
+        }
+        $body = $this->request->getJSON(true) ?? [];
+
+        $phone = preg_replace('/\s+/', '', (string)($body['mobile_number'] ?? ''));
+        if (!preg_match('/^\+?\d{9,15}$/', $phone)) {
+            return $this->respondError('mobile_number must be 9-15 digits, optionally with leading +.', 422);
+        }
+        $provider = strtolower(trim((string)($body['mno_provider'] ?? '')));
+        if (!in_array($provider, self::ALLOWED_MNO, true)) {
+            return $this->respondError('mno_provider must be one of: ' . implode(', ', self::ALLOWED_MNO), 422);
+        }
+        $idemKey = mb_substr((string)($body['idempotency_key'] ?? bin2hex(random_bytes(8))), 0, 64);
+
+        try {
+            $this->db->transStart();
+            $giftcardsTable = $this->db->prefixTable('giftcards');
+            $card = $this->db->query(
+                "SELECT * FROM {$giftcardsTable} WHERE giftcard_id = ? AND deleted = 0 LIMIT 1 FOR UPDATE",
+                [$id],
+            )->getRowArray();
+            if ($card === null) {
+                $this->db->transComplete();
+                return $this->respondError('Gift card not found.', 404);
+            }
+            if ($this->computeStatus($card) !== self::STATUS_ACTIVE) {
+                $this->db->transComplete();
+                return $this->respondError('Only active gift cards can be bound.', 409);
+            }
+
+            // Idempotency: same (card, idempotency_key) returns the existing binding.
+            $prior = $this->db->table('giftcard_bindings')
+                ->where('giftcard_id', $id)
+                ->where('idempotency_key', $idemKey)
+                ->get()
+                ->getRowArray();
+            if ($prior !== null) {
+                $this->db->transComplete();
+                return $this->respondSuccess([
+                    'binding' => $this->decorateBinding($prior),
+                    'message' => 'Existing binding returned (idempotent).',
+                ]);
+            }
+
+            // Refuse if there's already an active binding on this card. (The
+            // generated-column unique index also enforces this, but we want
+            // a friendly 409 instead of a duplicate-key surprise.)
+            $activeExisting = $this->db->table('giftcard_bindings')
+                ->where('giftcard_id', $id)
+                ->where('status', 'active')
+                ->where('deleted', 0)
+                ->countAllResults();
+            if ($activeExisting > 0) {
+                $this->db->transComplete();
+                return $this->respondError('Card is already bound to a phone. Unbind first.', 409);
+            }
+
+            $expires = date('Y-m-d H:i:s', time() + self::BIND_TTL_MIN * 60);
+
+            $this->db->table('giftcard_bindings')->insert([
+                'giftcard_id' => $id,
+                'mobile_number' => $phone,
+                'mno_provider' => $provider,
+                'status' => $this->devMode() ? 'active' : 'pending',
+                'bound_at' => $this->devMode() ? date('Y-m-d H:i:s') : null,
+                'pin_attempts' => 0,
+                'initiated_by_employee_id' => $this->currentUserId(),
+                'mno_request_id' => $this->mockTransactionId('STK'),
+                'idempotency_key' => $idemKey,
+                'expires_at' => $expires,
+                'ip' => $this->request->getIPAddress() ?: null,
+                'user_agent' => mb_substr((string)$this->request->getUserAgent(), 0, 255),
+                'deleted' => 0,
+            ]);
+            $bindingId = (int)$this->db->insertID();
+
+            $this->writeHistory($id, [
+                'action' => 'binding_' . ($this->devMode() ? 'activated' : 'requested'),
+                'amount' => '0.00',
+                'balance_before' => (string)$card['value'],
+                'balance_after' => (string)$card['value'],
+                'comment' => 'Bound to ' . $this->maskPhoneServer($phone) . ' via ' . $provider . ' (binding #' . $bindingId . ')',
+            ]);
+
+            $this->db->transComplete();
+            if (!$this->db->transStatus()) {
+                return $this->respondError('Failed to create binding.', 500);
+            }
+
+            $fresh = $this->db->table('giftcard_bindings')->where('binding_id', $bindingId)->get()->getRowArray();
+            return $this->respondSuccess([
+                'binding' => $this->decorateBinding($fresh ?? []),
+                'message' => $this->devMode()
+                    ? 'Binding activated (dev mode bypassed STK push).'
+                    : 'STK push sent — customer has ' . self::BIND_TTL_MIN . ' minutes to authorise.',
+            ], 'Binding created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::bind — ' . $e->getMessage());
+            return $this->respondError('Failed to create binding.', 500);
+        }
+    }
+
+    /** Operator-initiated unbind (admin override). */
+    public function unbind(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) return $auth;
+        if (!$this->bindingsApplied()) {
+            return $this->respondError('Gift card bindings migration is required.', 503);
+        }
+        if ($this->fetchGiftcard($id) === null) return $this->respondError('Gift card not found.', 404);
+        return $this->disableBindingInternal($id, 'unbound_by_operator');
+    }
+
+    // ---------- Payment intents ----------
+
+    public function createIntent(int $id): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) return $auth;
+        if (!$this->bindingsApplied()) {
+            return $this->respondError('Gift card bindings migration is required.', 503);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $amountRaw = $this->parseAmount($body['amount'] ?? null);
+        if ($amountRaw === null || $this->bccompZero($amountRaw) <= 0) {
+            return $this->respondError('amount must be a positive number.', 422);
+        }
+        $source = strtolower(trim((string)($body['source'] ?? '')));
+        if (!in_array($source, self::ALLOWED_INTENT_SOURCES, true)) {
+            return $this->respondError('source must be one of: ' . implode(', ', self::ALLOWED_INTENT_SOURCES), 422);
+        }
+        if ($source === 'split') {
+            // Phase 6 ships single-source intents only. Split needs an intent-
+            // legs table — tracked as a v2 follow-up.
+            return $this->respondError('Split tender is not implemented in this release.', 501);
+        }
+        $currency = strtoupper(trim((string)($body['currency'] ?? 'KES'))) ?: 'KES';
+        $idemKey = mb_substr((string)($body['idempotency_key'] ?? bin2hex(random_bytes(8))), 0, 64);
+        $saleId = isset($body['sale_id']) ? (int)$body['sale_id'] : null;
+
+        try {
+            $this->db->transStart();
+            $giftcardsTable = $this->db->prefixTable('giftcards');
+            $card = $this->db->query(
+                "SELECT * FROM {$giftcardsTable} WHERE giftcard_id = ? AND deleted = 0 LIMIT 1 FOR UPDATE",
+                [$id],
+            )->getRowArray();
+            if ($card === null) {
+                $this->db->transComplete();
+                return $this->respondError('Gift card not found.', 404);
+            }
+            if ($this->computeStatus($card) !== self::STATUS_ACTIVE) {
+                $this->db->transComplete();
+                return $this->respondError('Only active gift cards can receive payment intents.', 409);
+            }
+
+            // Idempotency replay
+            $prior = $this->db->table('giftcard_payment_intents')
+                ->where('giftcard_id', $id)
+                ->where('idempotency_key', $idemKey)
+                ->get()
+                ->getRowArray();
+            if ($prior !== null) {
+                $this->db->transComplete();
+                return $this->respondSuccess([
+                    'intent' => $this->decorateIntent($prior),
+                    'message' => 'Existing intent returned (idempotent).',
+                ]);
+            }
+
+            // Pending-transfer freeze still applies (a transfer-in-progress
+            // means ownership is changing — no new debits).
+            if ($this->hasPendingTransferUnderLock($id)) {
+                $this->db->transComplete();
+                return $this->respondError('Card has a pending transfer. Cancel it before taking a payment.', 409);
+            }
+            if ($this->hasInFlightIntentUnderLock($id)) {
+                $this->db->transComplete();
+                return $this->respondError('An intent is already in flight on this card. Cancel it first.', 409);
+            }
+
+            // For card_balance, validate sufficiency now.
+            if ($source === 'card_balance' && bccomp((string)$card['value'], $amountRaw, self::SCALE) < 0) {
+                $this->db->transComplete();
+                return $this->respondError('Insufficient card balance.', 422);
+            }
+
+            $isSync = in_array($source, self::SYNC_SOURCES, true);
+            $expires = $isSync ? null : date('Y-m-d H:i:s', time() + self::INTENT_TTL_SEC);
+            $initialStatus = $isSync ? 'pending' : 'awaiting_pin';
+
+            $this->db->table('giftcard_payment_intents')->insert([
+                'giftcard_id' => $id,
+                'sale_id' => $saleId,
+                'amount' => $amountRaw,
+                'currency' => $currency,
+                'source' => $source,
+                'status' => $initialStatus,
+                'mno_request_id' => $isSync ? null : $this->mockTransactionId('STK'),
+                'initiated_by_employee_id' => $this->currentUserId(),
+                'idempotency_key' => $idemKey,
+                'ip' => $this->request->getIPAddress() ?: null,
+                'user_agent' => mb_substr((string)$this->request->getUserAgent(), 0, 255),
+                'expires_at' => $expires,
+            ]);
+            $intentId = (int)$this->db->insertID();
+
+            // Synchronous sources (card_balance + wallet) settle inside this
+            // same tx. MNO/Co-op sources sit in awaiting_pin until callback.
+            if ($source === 'card_balance') {
+                $newBalance = bcsub((string)$card['value'], $amountRaw, self::SCALE);
+                $newStatus = $this->bccompZero($newBalance) <= 0 ? self::STATUS_USED : self::STATUS_ACTIVE;
+                $this->applyBalanceChangeLocked($id, $card, $newBalance, $newStatus, [
+                    'action' => self::ACTION_REDEEMED,
+                    'amount' => $amountRaw,
+                    'balance_before' => (string)$card['value'],
+                    'balance_after' => $newBalance,
+                    'comment' => 'Redeemed via card balance (intent #' . $intentId . ')',
+                ]);
+                $this->markIntentCompleted($intentId, 'CARD-' . $intentId);
+            } elseif ($source === 'pesaswap_wallet') {
+                $result = $this->debitWalletLocked($card, $amountRaw, $currency, $intentId);
+                if (isset($result['error'])) {
+                    $this->db->transComplete();
+                    return $this->respondError($result['error'], (int)($result['code'] ?? 422));
+                }
+                $this->markIntentCompleted($intentId, 'WLT-' . $intentId);
+            }
+
+            $this->db->transComplete();
+            if (!$this->db->transStatus()) {
+                return $this->respondError('Failed to create intent.', 500);
+            }
+
+            // In dev mode, auto-complete MNO/Co-op sources via a mock callback
+            // after a short delay so demos work without a real webhook. The
+            // delay is fake (callback is sync here); the front-end can poll
+            // showIntent() to see the transition.
+            if (!$isSync && $this->devMode()) {
+                $this->mockExternalCallback($intentId, $source);
+            }
+
+            $fresh = $this->db->table('giftcard_payment_intents')->where('intent_id', $intentId)->get()->getRowArray();
+            return $this->respondSuccess([
+                'intent' => $this->decorateIntent($fresh ?? []),
+            ], 'Intent created.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::createIntent — ' . $e->getMessage());
+            return $this->respondError('Failed to create intent.', 500);
+        }
+    }
+
+    public function showIntent(int $id, int $intentId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) return $auth;
+        if (!$this->bindingsApplied()) {
+            return $this->respondError('Gift card bindings migration is required.', 503);
+        }
+        $row = $this->db->table('giftcard_payment_intents')
+            ->where('intent_id', $intentId)
+            ->where('giftcard_id', $id)
+            ->get()
+            ->getRowArray();
+        if ($row === null) return $this->respondError('Intent not found.', 404);
+        return $this->respondSuccess(['intent' => $this->decorateIntent($row)]);
+    }
+
+    public function cancelIntent(int $id, int $intentId): ResponseInterface
+    {
+        if ($auth = $this->requireAuth()) return $auth;
+        if (!$this->bindingsApplied()) {
+            return $this->respondError('Gift card bindings migration is required.', 503);
+        }
+        try {
+            $this->db->transStart();
+            $intentsTable = $this->db->prefixTable('giftcard_payment_intents');
+            $row = $this->db->query(
+                "SELECT * FROM {$intentsTable} WHERE intent_id = ? AND giftcard_id = ? LIMIT 1 FOR UPDATE",
+                [$intentId, $id],
+            )->getRowArray();
+            if ($row === null) {
+                $this->db->transComplete();
+                return $this->respondError('Intent not found.', 404);
+            }
+            if (!in_array($row['status'], ['pending', 'awaiting_pin', 'authorised'], true)) {
+                $this->db->transComplete();
+                return $this->respondError('Intent is already in a terminal state (' . $row['status'] . ').', 409);
+            }
+            $this->db->table('giftcard_payment_intents')->where('intent_id', $intentId)->update([
+                'status' => 'cancelled',
+                'completed_at' => date('Y-m-d H:i:s'),
+                'failure_code' => 'CUSTOMER_CANCELLED',
+                'failure_reason' => 'Cancelled by operator.',
+            ]);
+            $this->db->transComplete();
+            $fresh = $this->db->table('giftcard_payment_intents')->where('intent_id', $intentId)->get()->getRowArray();
+            return $this->respondSuccess(['intent' => $this->decorateIntent($fresh ?? [])], 'Intent cancelled.');
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::cancelIntent — ' . $e->getMessage());
+            return $this->respondError('Failed to cancel intent.', 500);
+        }
+    }
+
+    // ---------- MNO webhook (HMAC-stub) ----------
+
+    public function mnoCallback(string $provider): ResponseInterface
+    {
+        $provider = strtolower(trim($provider));
+        if (!in_array($provider, self::ALLOWED_MNO, true)) {
+            return $this->respondError('Unknown provider.', 404);
+        }
+        if (!$this->bindingsApplied()) {
+            return $this->respondError('Migration not applied.', 503);
+        }
+
+        // HMAC verification: required in production, bypassed only when the
+        // operator hasn't configured a secret (dev mode).
+        $secret = (string)$this->getAppConfig('giftcard_mno_webhook_secret', '');
+        $bodyRaw = $this->request->getBody() ?? '';
+        if ($secret !== '') {
+            $sig = (string)$this->request->getHeaderLine('X-Pesaswap-Signature');
+            $expected = hash_hmac('sha256', $bodyRaw, $secret);
+            if (!hash_equals($expected, $sig)) {
+                return $this->respondError('Invalid signature.', 401);
+            }
+        }
+
+        $body = json_decode($bodyRaw, true) ?? [];
+        $mnoRequestId = (string)($body['mno_request_id'] ?? '');
+        $status = strtolower((string)($body['status'] ?? ''));
+        $mnoTxnRef = (string)($body['mno_txn_ref'] ?? '');
+        $failureCode = (string)($body['failure_code'] ?? '');
+        $failureReason = (string)($body['failure_reason'] ?? '');
+        if ($mnoRequestId === '') return $this->respondError('mno_request_id required.', 422);
+        if (!in_array($status, ['completed', 'failed'], true)) {
+            return $this->respondError('status must be completed or failed.', 422);
+        }
+
+        try {
+            // Could be a binding STK callback OR an intent STK callback —
+            // route by which table holds the mno_request_id.
+            $intent = $this->db->table('giftcard_payment_intents')
+                ->where('mno_request_id', $mnoRequestId)
+                ->get()
+                ->getRowArray();
+            if ($intent !== null) {
+                return $this->handleIntentCallback($intent, $provider, $status, $mnoTxnRef, $failureCode, $failureReason);
+            }
+            $binding = $this->db->table('giftcard_bindings')
+                ->where('mno_request_id', $mnoRequestId)
+                ->get()
+                ->getRowArray();
+            if ($binding !== null) {
+                return $this->handleBindingCallback($binding, $provider, $status, $failureCode, $failureReason);
+            }
+            return $this->respondError('Unknown mno_request_id.', 404);
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::mnoCallback — ' . $e->getMessage());
+            return $this->respondError('Failed to process callback.', 500);
+        }
+    }
+
+    // ---------- Public self-service (OTP-gated unbind + disable) ----------
+
+    public function publicBinding(string $code): ResponseInterface
+    {
+        if (!$this->publicTransferRateLimit('gc_binding_lookup', 30)) {
+            return $this->respondError('Too many lookups.', 429);
+        }
+        if (!$this->bindingsApplied()) return $this->respondSuccess(['binding' => null]);
+        $card = $this->lookupCardByCode($code);
+        if ($card === null) return $this->respondSuccess(['binding' => null]);
+        $row = $this->db->table('giftcard_bindings')
+            ->where('giftcard_id', (int)$card['giftcard_id'])
+            ->where('status', 'active')
+            ->where('deleted', 0)
+            ->get()
+            ->getRowArray();
+        if ($row === null) return $this->respondSuccess(['binding' => null]);
+        // Sanitised projection — never leak the full phone.
+        return $this->respondSuccess([
+            'binding' => [
+                'binding_id' => (int)$row['binding_id'],
+                'mno_provider' => (string)$row['mno_provider'],
+                'masked_phone' => $this->maskPhoneServer((string)$row['mobile_number']),
+                'bound_at' => $row['bound_at'],
+                'last_used_at' => $row['last_used_at'],
+            ],
+        ]);
+    }
+
+    public function publicSendOtp(string $code): ResponseInterface
+    {
+        if (!$this->publicTransferRateLimit('gc_otp_send', self::PUBLIC_OTP_RATE)) {
+            return $this->respondError('Too many OTP requests.', 429);
+        }
+        if (!$this->bindingsApplied()) return $this->respondError('Migration not applied.', 503);
+        $body = $this->request->getJSON(true) ?? [];
+        $action = strtolower(trim((string)($body['action'] ?? '')));
+        if (!in_array($action, ['unbind', 'disable'], true)) {
+            return $this->respondError('action must be unbind or disable.', 422);
+        }
+        $card = $this->lookupCardByCode($code);
+        if ($card === null) return $this->respondError('Card not found.', 404);
+
+        // Both verbs require an active binding (otherwise no phone to OTP).
+        $binding = $this->db->table('giftcard_bindings')
+            ->where('giftcard_id', (int)$card['giftcard_id'])
+            ->where('status', 'active')
+            ->where('deleted', 0)
+            ->get()
+            ->getRowArray();
+        if ($binding === null) {
+            return $this->respondError('Card has no active phone binding — operator must perform this action.', 409);
+        }
+
+        // Invalidate any prior un-consumed OTP for this card+action so the
+        // generated-column unique index has room.
+        $this->db->table('giftcard_otps')
+            ->where('giftcard_id', (int)$card['giftcard_id'])
+            ->where('action', $action)
+            ->where('consumed_at IS NULL', null, false)
+            ->update(['consumed_at' => date('Y-m-d H:i:s')]);
+
+        $plain = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $hash = hash('sha256', $plain);
+        $expires = date('Y-m-d H:i:s', time() + self::OTP_TTL_MIN * 60);
+
+        $this->db->table('giftcard_otps')->insert([
+            'giftcard_id' => (int)$card['giftcard_id'],
+            'action' => $action,
+            'code_hash' => $hash,
+            'attempts' => 0,
+            'max_attempts' => 5,
+            'expires_at' => $expires,
+            'ip' => $this->request->getIPAddress() ?: null,
+            'user_agent' => mb_substr((string)$this->request->getUserAgent(), 0, 255),
+        ]);
+
+        $inline = (string)$this->getAppConfig('giftcard_otp_inline_return', '1') === '1';
+        return $this->respondSuccess([
+            'masked_phone' => $this->maskPhoneServer((string)$binding['mobile_number']),
+            'expires_at' => $expires,
+            // Inline return only in dev mode. Real production wires SMS and
+            // never returns the plaintext code.
+            'demo_code' => $inline ? $plain : null,
+        ], 'OTP sent.');
+    }
+
+    public function publicUnbind(string $code): ResponseInterface
+    {
+        if (!$this->publicTransferRateLimit('gc_unbind', self::PUBLIC_OTP_RATE)) {
+            return $this->respondError('Too many attempts.', 429);
+        }
+        $card = $this->verifyOtpForCode($code, 'unbind');
+        if (isset($card['error'])) return $this->respondError($card['error'], (int)$card['code']);
+        return $this->disableBindingInternal((int)$card['giftcard_id'], 'unbound_by_customer');
+    }
+
+    public function publicDisable(string $code): ResponseInterface
+    {
+        if (!$this->publicTransferRateLimit('gc_disable', self::PUBLIC_DISABLE_RATE)) {
+            return $this->respondError('Too many attempts.', 429);
+        }
+        $card = $this->verifyOtpForCode($code, 'disable');
+        if (isset($card['error'])) return $this->respondError($card['error'], (int)$card['code']);
+
+        try {
+            $this->db->transStart();
+            // Disable = status='disabled' (NOT delete=1) — keeps the row
+            // visible to admins for fraud audit.
+            $this->db->table('giftcards')
+                ->where('giftcard_id', (int)$card['giftcard_id'])
+                ->update([
+                    'status' => self::STATUS_DISABLED,
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ]);
+            // Also disable any active binding so the bound phone stops being
+            // a key to a now-frozen card.
+            $this->db->table('giftcard_bindings')
+                ->where('giftcard_id', (int)$card['giftcard_id'])
+                ->where('status', 'active')
+                ->update(['status' => 'disabled']);
+            $this->writeHistory((int)$card['giftcard_id'], [
+                'action' => self::ACTION_DISABLED,
+                'amount' => '0.00',
+                'balance_before' => (string)$card['value'],
+                'balance_after' => (string)$card['value'],
+                'comment' => 'Disabled by customer via self-service portal (OTP verified)',
+            ]);
+            $this->db->transComplete();
+            return $this->respondSuccess([
+                'giftcard_id' => (int)$card['giftcard_id'],
+                'status' => self::STATUS_DISABLED,
+            ], 'Card disabled.');
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::publicDisable — ' . $e->getMessage());
+            return $this->respondError('Failed to disable card.', 500);
+        }
+    }
+
+    // ---------- Helpers ----------
+
+    /**
+     * Centralised balance write — assumes the caller has already locked the
+     * giftcard row inside a transStart. Extracted out of mutateBalance so
+     * createIntent can share the same debit+history machinery without
+     * triggering its own freeze check.
+     */
+    private function applyBalanceChangeLocked(int $id, array $row, string $newBalance, string $newStatus, array $historyEntry): void
+    {
+        $this->db->table('giftcards')->where('giftcard_id', $id)->update([
+            'value' => $newBalance,
+            'status' => $newStatus,
+        ]);
+        $this->writeHistory($id, array_merge([
+            'amount' => '0.00',
+            'balance_before' => (string)$row['value'],
+            'balance_after' => $newBalance,
+            'txn_status' => 'completed',
+        ], $historyEntry));
+    }
+
+    /** Caller must have giftcard row locked. */
+    private function debitWalletLocked(array $card, string $amount, string $currency, int $intentId): array
+    {
+        $recipientEmail = trim((string)($card['recipient_email'] ?? ''));
+        if ($recipientEmail === '') {
+            return ['error' => 'Wallet requires recipient_email on the card.', 'code' => 422];
+        }
+        $personId = $this->resolvePersonByEmail($recipientEmail);
+        if ($personId === null) {
+            return ['error' => 'No customer wallet on file for this recipient.', 'code' => 422];
+        }
+
+        $walletsTable = $this->db->prefixTable('pesaswap_wallets');
+        $wallet = $this->db->query(
+            "SELECT * FROM {$walletsTable} WHERE person_id = ? AND currency = ? AND deleted = 0 LIMIT 1 FOR UPDATE",
+            [$personId, $currency],
+        )->getRowArray();
+        if ($wallet === null) {
+            return ['error' => 'Customer wallet is empty or not initialised.', 'code' => 422];
+        }
+        if (bccomp((string)$wallet['balance'], $amount, self::SCALE) < 0) {
+            return ['error' => 'Insufficient wallet balance.', 'code' => 422];
+        }
+        $newBalance = bcsub((string)$wallet['balance'], $amount, self::SCALE);
+        $this->db->table('pesaswap_wallets')->where('wallet_id', (int)$wallet['wallet_id'])->update(['balance' => $newBalance]);
+        $this->writeHistory((int)$card['giftcard_id'], [
+            'action' => self::ACTION_REDEEMED,
+            'amount' => $amount,
+            'balance_before' => (string)$card['value'],
+            'balance_after' => (string)$card['value'],
+            'comment' => 'Redeemed via PESASWAP wallet (intent #' . $intentId . ', wallet balance ' . $newBalance . ')',
+            'provider' => 'pesaswap_wallet',
+        ]);
+        return ['ok' => true];
+    }
+
+    private function markIntentCompleted(int $intentId, string $txnRef): void
+    {
+        $this->db->table('giftcard_payment_intents')->where('intent_id', $intentId)->update([
+            'status' => 'completed',
+            'completed_at' => date('Y-m-d H:i:s'),
+            'mno_txn_ref' => $txnRef,
+        ]);
+    }
+
+    /**
+     * Mock external callback for dev mode. Runs inline — no real async.
+     * 90% success rate so demos see both paths.
+     */
+    private function mockExternalCallback(int $intentId, string $source): void
+    {
+        $success = random_int(1, 100) <= 90;
+        if ($success) {
+            $this->markIntentCompleted($intentId, strtoupper($source) . '-' . $intentId . '-' . substr(bin2hex(random_bytes(3)), 0, 6));
+            // For card_balance and wallet we already debited. MNO sources
+            // don't debit the card itself — they debit the customer's MNO
+            // account, which is out-of-band. No giftcard.value mutation here.
+        } else {
+            $this->db->table('giftcard_payment_intents')->where('intent_id', $intentId)->update([
+                'status' => 'failed',
+                'completed_at' => date('Y-m-d H:i:s'),
+                'failure_code' => 'PIN_DECLINED',
+                'failure_reason' => 'Customer declined the PIN prompt (mock).',
+            ]);
+        }
+    }
+
+    private function handleIntentCallback(array $intent, string $provider, string $status, string $mnoTxnRef, string $failureCode, string $failureReason): ResponseInterface
+    {
+        if ($intent['source'] !== $provider) {
+            return $this->respondError('provider mismatch on intent.', 409);
+        }
+        if (!in_array($intent['status'], ['pending', 'awaiting_pin', 'authorised'], true)) {
+            // Terminal state idempotency — late callback is a no-op.
+            return $this->respondSuccess(['intent_id' => (int)$intent['intent_id'], 'already_terminal' => true]);
+        }
+        if ($status === 'completed') {
+            $this->markIntentCompleted((int)$intent['intent_id'], $mnoTxnRef !== '' ? $mnoTxnRef : 'MNO-' . $intent['intent_id']);
+        } else {
+            $this->db->table('giftcard_payment_intents')->where('intent_id', (int)$intent['intent_id'])->update([
+                'status' => 'failed',
+                'completed_at' => date('Y-m-d H:i:s'),
+                'failure_code' => $failureCode !== '' ? mb_substr($failureCode, 0, 32) : 'UNKNOWN',
+                'failure_reason' => $failureReason !== '' ? mb_substr($failureReason, 0, 255) : 'MNO declined.',
+            ]);
+        }
+        return $this->respondSuccess(['intent_id' => (int)$intent['intent_id'], 'status' => $status]);
+    }
+
+    private function handleBindingCallback(array $binding, string $provider, string $status, string $failureCode, string $failureReason): ResponseInterface
+    {
+        if ($binding['mno_provider'] !== $provider) {
+            return $this->respondError('provider mismatch on binding.', 409);
+        }
+        if ($binding['status'] !== 'pending') {
+            return $this->respondSuccess(['binding_id' => (int)$binding['binding_id'], 'already_terminal' => true]);
+        }
+        if ($status === 'completed') {
+            $this->db->table('giftcard_bindings')->where('binding_id', (int)$binding['binding_id'])->update([
+                'status' => 'active',
+                'bound_at' => date('Y-m-d H:i:s'),
+            ]);
+        } else {
+            $this->db->table('giftcard_bindings')->where('binding_id', (int)$binding['binding_id'])->update([
+                'status' => 'disabled',
+                'pin_attempts' => (int)$binding['pin_attempts'] + 1,
+            ]);
+            $this->writeHistory((int)$binding['giftcard_id'], [
+                'action' => 'binding_failed',
+                'amount' => '0.00',
+                'balance_before' => '0.00',
+                'balance_after' => '0.00',
+                'comment' => 'Binding failed: ' . ($failureCode ?: 'UNKNOWN') . ' — ' . ($failureReason ?: 'no reason given'),
+            ]);
+        }
+        return $this->respondSuccess(['binding_id' => (int)$binding['binding_id'], 'status' => $status]);
+    }
+
+    private function disableBindingInternal(int $giftcardId, string $reason): ResponseInterface
+    {
+        try {
+            $this->db->transStart();
+            $existing = $this->db->table('giftcard_bindings')
+                ->where('giftcard_id', $giftcardId)
+                ->where('status', 'active')
+                ->where('deleted', 0)
+                ->get()
+                ->getRowArray();
+            if ($existing === null) {
+                $this->db->transComplete();
+                return $this->respondError('No active binding to disable.', 404);
+            }
+            $this->db->table('giftcard_bindings')->where('binding_id', (int)$existing['binding_id'])->update([
+                'status' => 'disabled',
+            ]);
+            $this->writeHistory($giftcardId, [
+                'action' => 'binding_disabled',
+                'amount' => '0.00',
+                'balance_before' => '0.00',
+                'balance_after' => '0.00',
+                'comment' => 'Binding to ' . $this->maskPhoneServer((string)$existing['mobile_number']) . ' disabled (' . $reason . ')',
+            ]);
+            $this->db->transComplete();
+            return $this->respondSuccess(['binding_id' => (int)$existing['binding_id']], 'Binding disabled.');
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::disableBindingInternal — ' . $e->getMessage());
+            return $this->respondError('Failed to disable binding.', 500);
+        }
+    }
+
+    /**
+     * Verifies the OTP for a card+action. Returns the card row on success,
+     * or {error, code} on failure (with sensible HTTP code).
+     */
+    private function verifyOtpForCode(string $code, string $action): array
+    {
+        if (!$this->bindingsApplied()) {
+            return ['error' => 'Migration not applied.', 'code' => 503];
+        }
+        $body = $this->request->getJSON(true) ?? [];
+        $otpPlain = trim((string)($body['otp'] ?? ''));
+        if (!preg_match('/^\d{6}$/', $otpPlain)) {
+            return ['error' => 'OTP must be a 6-digit code.', 'code' => 422];
+        }
+        $card = $this->lookupCardByCode($code);
+        if ($card === null) return ['error' => 'Card not found.', 'code' => 404];
+
+        try {
+            $this->db->transStart();
+            $otpTable = $this->db->prefixTable('giftcard_otps');
+            $otp = $this->db->query(
+                "SELECT * FROM {$otpTable} WHERE giftcard_id = ? AND action = ? AND consumed_at IS NULL LIMIT 1 FOR UPDATE",
+                [(int)$card['giftcard_id'], $action],
+            )->getRowArray();
+            if ($otp === null) {
+                $this->db->transComplete();
+                return ['error' => 'No active OTP. Request a new one.', 'code' => 422];
+            }
+            if (strtotime((string)$otp['expires_at']) < time()) {
+                $this->db->table('giftcard_otps')->where('otp_id', (int)$otp['otp_id'])->update(['consumed_at' => date('Y-m-d H:i:s')]);
+                $this->db->transComplete();
+                return ['error' => 'OTP has expired.', 'code' => 422];
+            }
+            if ((int)$otp['attempts'] >= (int)$otp['max_attempts']) {
+                $this->db->table('giftcard_otps')->where('otp_id', (int)$otp['otp_id'])->update(['consumed_at' => date('Y-m-d H:i:s')]);
+                $this->db->transComplete();
+                return ['error' => 'OTP locked after too many attempts.', 'code' => 429];
+            }
+            $hash = hash('sha256', $otpPlain);
+            if (!hash_equals((string)$otp['code_hash'], $hash)) {
+                $this->db->table('giftcard_otps')->where('otp_id', (int)$otp['otp_id'])->update(['attempts' => (int)$otp['attempts'] + 1]);
+                $this->db->transComplete();
+                return ['error' => 'OTP code is incorrect.', 'code' => 401];
+            }
+            $this->db->table('giftcard_otps')->where('otp_id', (int)$otp['otp_id'])->update(['consumed_at' => date('Y-m-d H:i:s')]);
+            $this->db->transComplete();
+            return $card;
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::verifyOtpForCode — ' . $e->getMessage());
+            return ['error' => 'Failed to verify OTP.', 'code' => 500];
+        }
+    }
+
+    private function lookupCardByCode(string $code): ?array
+    {
+        $normalized = strtoupper(trim($code));
+        if (!preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) return null;
+        $row = $this->db->table('giftcards')
+            ->where('giftcard_number', $normalized)
+            ->where('deleted', 0)
+            ->get()
+            ->getRowArray();
+        return $row ?: null;
+    }
+
+    /** Caller must hold the giftcard row lock. */
+    private function hasInFlightIntentUnderLock(int $giftcardId): bool
+    {
+        if (!$this->db->tableExists('giftcard_payment_intents')) return false;
+        $count = $this->db->table('giftcard_payment_intents')
+            ->where('giftcard_id', $giftcardId)
+            ->whereIn('status', ['pending', 'awaiting_pin', 'authorised'])
+            ->countAllResults();
+        return $count > 0;
+    }
+
+    private function decorateBinding(array $row): array
+    {
+        if ($row === []) return $row;
+        return [
+            'binding_id' => (int)$row['binding_id'],
+            'giftcard_id' => (int)$row['giftcard_id'],
+            'mno_provider' => (string)$row['mno_provider'],
+            'mobile_number' => (string)$row['mobile_number'],
+            'masked_phone' => $this->maskPhoneServer((string)$row['mobile_number']),
+            'status' => (string)$row['status'],
+            'bound_at' => $row['bound_at'],
+            'last_used_at' => $row['last_used_at'],
+            'expires_at' => $row['expires_at'] ?? null,
+            'pin_attempts' => (int)$row['pin_attempts'],
+            'created_at' => $row['created_at'] ?? null,
+        ];
+    }
+
+    private function decorateIntent(array $row): array
+    {
+        if ($row === []) return $row;
+        return [
+            'intent_id' => (int)$row['intent_id'],
+            'giftcard_id' => $row['giftcard_id'] === null ? null : (int)$row['giftcard_id'],
+            'sale_id' => $row['sale_id'] === null ? null : (int)$row['sale_id'],
+            'amount' => (float)$row['amount'],
+            'currency' => (string)$row['currency'],
+            'source' => (string)$row['source'],
+            'status' => (string)$row['status'],
+            'mno_request_id' => $row['mno_request_id'],
+            'mno_txn_ref' => $row['mno_txn_ref'],
+            'failure_code' => $row['failure_code'],
+            'failure_reason' => $row['failure_reason'],
+            'expires_at' => $row['expires_at'],
+            'completed_at' => $row['completed_at'],
+            'created_at' => $row['created_at'] ?? null,
+        ];
+    }
+
+    private function maskPhoneServer(string $phone): string
+    {
+        $digits = preg_replace('/\D/', '', $phone) ?? '';
+        if (strlen($digits) < 4) return $phone;
+        $tail = substr($digits, -4);
+        $head = substr($digits, 0, max(0, strlen($digits) - 7));
+        return '+' . str_pad($head, 3, '*') . ' ••• ' . $tail;
+    }
+
+    private function resolvePersonByEmail(string $email): ?int
+    {
+        if (!$this->db->tableExists('people')) return null;
+        $row = $this->db->table('people')->where('email', $email)->limit(1)->get()->getRowArray();
+        return $row ? (int)$row['person_id'] : null;
+    }
+
+    private function getAppConfig(string $key, string $default): string
+    {
+        try {
+            if (!$this->db->tableExists('app_config')) return $default;
+            $row = $this->db->table('app_config')->where('key', $key)->get()->getRowArray();
+            return $row ? (string)$row['value'] : $default;
+        } catch (Throwable $e) {
+            return $default;
+        }
+    }
+
+    /** True when no MNO webhook secret is configured — auto-confirms STK + binding. */
+    private function devMode(): bool
+    {
+        return (string)$this->getAppConfig('giftcard_mno_webhook_secret', '') === '';
+    }
+
+    /**
+     * Sweep stale awaiting_pin intents past their expires_at. Called by the
+     * spark CLI app/Commands/SweepStaleGiftcardIntents.php. Returns a summary.
+     */
+    public function sweepStaleIntents(int $limit = 100): array
+    {
+        $summary = ['expired' => 0];
+        if (!$this->bindingsApplied()) return $summary + ['error' => 'migration-not-applied'];
+        $limit = max(1, min($limit, 1000));
+        $now = date('Y-m-d H:i:s');
+        $intents = $this->db->prefixTable('giftcard_payment_intents');
+        try {
+            $this->db->query(
+                "UPDATE {$intents} SET status='expired', completed_at=?, failure_code='TIMEOUT', failure_reason='Awaiting PIN timeout.'
+                 WHERE status IN ('pending','awaiting_pin') AND expires_at IS NOT NULL AND expires_at < ? LIMIT {$limit}",
+                [$now, $now],
+            );
+            $summary['expired'] = (int)$this->db->affectedRows();
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::sweepStaleIntents — ' . $e->getMessage());
+            $summary['error'] = $e->getMessage();
+        }
+        // Also sweep stale pending bindings.
+        try {
+            $bindings = $this->db->prefixTable('giftcard_bindings');
+            $this->db->query(
+                "UPDATE {$bindings} SET status='disabled' WHERE status='pending' AND expires_at IS NOT NULL AND expires_at < ?",
+                [$now],
+            );
+            $summary['bindings_expired'] = (int)$this->db->affectedRows();
+        } catch (Throwable $e) {
+            log_message('warning', 'GiftcardsController::sweepStaleIntents bindings — ' . $e->getMessage());
+        }
+        return $summary;
     }
 }

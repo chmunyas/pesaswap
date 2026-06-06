@@ -138,6 +138,36 @@ class PublicController extends BaseApiController
         return $tk->{$method}($code);
     }
 
+    /**
+     * POST /api/public/giftcards/:code/disable
+     * Self-service disable (freezes balance). OTP-gated; only available when
+     * the card has an active phone binding.
+     */
+    public function giftcardPublicDisable(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicDisable', $code);
+    }
+
+    /**
+     * GET /api/public/giftcards/:code/binding — sanitised binding lookup.
+     * POST /api/public/giftcards/:code/binding/otp — send OTP for unbind/disable.
+     * DELETE /api/public/giftcards/:code/binding — OTP-gated customer unbind.
+     */
+    public function giftcardPublicBinding(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicBinding', $code);
+    }
+
+    public function giftcardPublicOtp(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicSendOtp', $code);
+    }
+
+    public function giftcardPublicUnbind(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicUnbind', $code);
+    }
+
     private function delegateToGiftcards(string $method, string $arg): ResponseInterface
     {
         $gc = new GiftcardsController();

@@ -96,6 +96,17 @@ $routes->group('api', static function ($routes) {
     $routes->get('giftcards/(:num)/transfers', 'Api\GiftcardsController::transferList/$1');
     $routes->delete('giftcards/(:num)/transfers/(:num)', 'Api\GiftcardsController::transferCancel/$1/$2');
 
+    // NFC binding + payment intents (Phase 6)
+    $routes->get('giftcards/(:num)/bindings', 'Api\GiftcardsController::bindingIndex/$1');
+    $routes->post('giftcards/(:num)/bind', 'Api\GiftcardsController::bind/$1');
+    $routes->delete('giftcards/(:num)/bind', 'Api\GiftcardsController::unbind/$1');
+    $routes->post('giftcards/(:num)/payment-intent', 'Api\GiftcardsController::createIntent/$1');
+    $routes->get('giftcards/(:num)/payment-intent/(:num)', 'Api\GiftcardsController::showIntent/$1/$2');
+    $routes->post('giftcards/(:num)/payment-intent/(:num)/cancel', 'Api\GiftcardsController::cancelIntent/$1/$2');
+
+    // MNO webhook (signed; signature optional in dev mode)
+    $routes->post('webhooks/mno/(:segment)', 'Api\GiftcardsController::mnoCallback/$1');
+
     // Design templates (admin)
     $routes->get('giftcard-designs', 'Api\GiftcardsController::designIndex');
     $routes->get('giftcard-designs/(:num)', 'Api\GiftcardsController::designShow/$1');
@@ -195,6 +206,11 @@ $routes->group('api', static function ($routes) {
     $routes->get('public/giftcards/balance/(:segment)', 'Api\PublicController::giftcardBalance/$1');
     $routes->get('public/giftcards/transfer/(:segment)', 'Api\PublicController::giftcardTransferLookup/$1');
     $routes->post('public/giftcards/transfer/(:segment)/accept', 'Api\PublicController::giftcardTransferAccept/$1');
+    // Customer self-service (Phase 6)
+    $routes->get('public/giftcards/(:segment)/binding', 'Api\PublicController::giftcardPublicBinding/$1');
+    $routes->post('public/giftcards/(:segment)/binding/otp', 'Api\PublicController::giftcardPublicOtp/$1');
+    $routes->delete('public/giftcards/(:segment)/binding', 'Api\PublicController::giftcardPublicUnbind/$1');
+    $routes->post('public/giftcards/(:segment)/disable', 'Api\PublicController::giftcardPublicDisable/$1');
     $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
     $routes->post('public/tickets/(:segment)/transfer/request', 'Api\PublicController::ticketTransferRequest/$1');
     $routes->post('public/tickets/(:segment)/transfer/confirm', 'Api\PublicController::ticketTransferConfirm/$1');
@@ -220,13 +236,19 @@ $routes->group('api', static function ($routes) {
     $routes->options('giftcards/(:num)', 'Api\GiftcardsController::preflight');
     $routes->options('giftcards/(:num)/(:any)', 'Api\GiftcardsController::preflight');
     $routes->options('giftcards/(:num)/transfers/(:num)', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcards/(:num)/payment-intent/(:num)', 'Api\GiftcardsController::preflight');
+    $routes->options('giftcards/(:num)/payment-intent/(:num)/cancel', 'Api\GiftcardsController::preflight');
     $routes->options('giftcard-designs', 'Api\GiftcardsController::preflight');
     $routes->options('giftcard-designs/(:num)', 'Api\GiftcardsController::preflight');
     $routes->options('giftcard-denominations', 'Api\GiftcardsController::preflight');
     $routes->options('giftcard-denominations/(:num)', 'Api\GiftcardsController::preflight');
+    $routes->options('webhooks/mno/(:segment)', 'Api\GiftcardsController::preflight');
     $routes->options('public/giftcards/balance/(:segment)', 'Api\PublicController::preflight');
     $routes->options('public/giftcards/transfer/(:segment)', 'Api\PublicController::preflight');
     $routes->options('public/giftcards/transfer/(:segment)/accept', 'Api\PublicController::preflight');
+    $routes->options('public/giftcards/(:segment)/binding', 'Api\PublicController::preflight');
+    $routes->options('public/giftcards/(:segment)/binding/otp', 'Api\PublicController::preflight');
+    $routes->options('public/giftcards/(:segment)/disable', 'Api\PublicController::preflight');
     $routes->options('expenses', 'Api\ExpensesController::preflight');
     $routes->options('cashups', 'Api\CashupsController::preflight');
     $routes->options('cashups/(:num)', 'Api\CashupsController::preflight');
