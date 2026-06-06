@@ -2,14 +2,16 @@
 
 namespace Tests\Controllers;
 
+use App\Models\Employee;
+use CodeIgniter\Config\Services;
 use CodeIgniter\Test\CIUnitTestCase;
 use CodeIgniter\Test\DatabaseTestTrait;
 use CodeIgniter\Test\FeatureTestTrait;
-use CodeIgniter\Config\Services;
-use App\Models\Employee;
-use App\Models\Module;
 
-class EmployeesControllerTest extends CIUnitTestCase
+/**
+ * @internal
+ */
+final class EmployeesControllerTest extends CIUnitTestCase
 {
     use DatabaseTestTrait;
     use FeatureTestTrait;
@@ -17,7 +19,7 @@ class EmployeesControllerTest extends CIUnitTestCase
     protected $migrate     = true;
     protected $migrateOnce = true;
     protected $refresh     = false;
-    protected $namespace   = null;
+    protected $namespace;
 
     protected function setUp(): void
     {
@@ -30,25 +32,25 @@ class EmployeesControllerTest extends CIUnitTestCase
             'first_name'   => 'NonAdmin',
             'last_name'    => 'User',
             'email'        => 'nonadmin@test.com',
-            'phone_number' => '555-1234'
+            'phone_number' => '555-1234',
         ];
-        
+
         $employeeData = [
             'username'      => 'nonadmin',
             'password'      => password_hash('password123', PASSWORD_DEFAULT),
             'hash_version'  => 2,
             'language_code' => 'en',
-            'language'      => 'english'
+            'language'      => 'english',
         ];
-        
+
         $grantsData = [
             ['permission_id' => 'customers', 'menu_group' => 'home'],
-            ['permission_id' => 'sales', 'menu_group' => 'home']
+            ['permission_id' => 'sales', 'menu_group' => 'home'],
         ];
-        
+
         $employeeModel = model(Employee::class);
         $employeeModel->save_employee($personData, $employeeData, $grantsData, NEW_ENTRY);
-        
+
         return $employeeModel->get_found_rows('');
     }
 
@@ -68,13 +70,28 @@ class EmployeesControllerTest extends CIUnitTestCase
         $session->set('menu_group', 'home');
     }
 
+    /**
+     * Returns the session array for the admin user. Use as
+     *   $this->withSession($this->adminSession())->post(...)
+     * because Services::session() inside the controller is a different
+     * instance from the one loginAsAdmin() writes to — see
+     * Tests\Controllers\ConfigTest for the same pattern.
+     */
+    protected function adminSession(): array
+    {
+        return ['person_id' => 1, 'menu_group' => 'office'];
+    }
+
+    protected function nonAdminSession(int $personId): array
+    {
+        return ['person_id' => $personId, 'menu_group' => 'home'];
+    }
+
     public function testNonAdminCannotViewAdminAccount(): void
     {
         $nonAdminId = $this->createNonAdminEmployee();
-        $this->loginAsNonAdmin($nonAdminId);
-        
-        $response = $this->get('/employees/view/1');
-        
+        $response   = $this->withSession($this->nonAdminSession($nonAdminId))->get('/employees/view/1');
+
         $response->assertRedirect();
         $this->assertStringContainsString('no_access', $response->getRedirectUrl());
     }
@@ -82,15 +99,13 @@ class EmployeesControllerTest extends CIUnitTestCase
     public function testNonAdminCannotModifyAdminAccount(): void
     {
         $nonAdminId = $this->createNonAdminEmployee();
-        $this->loginAsNonAdmin($nonAdminId);
-        
-        $response = $this->post('/employees/save/1', [
+        $response   = $this->withSession($this->nonAdminSession($nonAdminId))->post('/employees/save/1', [
             'first_name' => 'Hacked',
-            'last_name' => 'Admin',
-            'email' => 'hacked@evil.com',
-            'username' => 'admin'
+            'last_name'  => 'Admin',
+            'email'      => 'hacked@evil.com',
+            'username'   => 'admin',
         ]);
-        
+
         $response->assertStatus(200);
         $result = json_decode($response->getJSON(), true);
         $this->assertFalse($result['success']);
@@ -100,12 +115,10 @@ class EmployeesControllerTest extends CIUnitTestCase
     public function testNonAdminCannotDeleteAdminAccount(): void
     {
         $nonAdminId = $this->createNonAdminEmployee();
-        $this->loginAsNonAdmin($nonAdminId);
-        
-        $response = $this->post('/employees/delete', [
-            'ids' => [1]
+        $response   = $this->withSession($this->nonAdminSession($nonAdminId))->post('/employees/delete', [
+            'ids' => [1],
         ]);
-        
+
         $response->assertStatus(200);
         $result = json_decode($response->getJSON(), true);
         $this->assertFalse($result['success']);
@@ -115,24 +128,23 @@ class EmployeesControllerTest extends CIUnitTestCase
     public function testNonAdminCannotGrantPermissionsTheyDontHave(): void
     {
         $nonAdminId = $this->createNonAdminEmployee();
-        $this->loginAsNonAdmin($nonAdminId);
-        
-        $targetEmployeeId = $nonAdminId + rand(1000, 9999);
+
+        $targetEmployeeId = $nonAdminId + mt_rand(1000, 9999);
         $this->createTestEmployee($targetEmployeeId);
-        
-        $response = $this->post('/employees/save/' . $targetEmployeeId, [
-            'first_name' => 'Test',
-            'last_name' => 'Employee',
-            'email' => 'test@test.com',
-            'username' => 'testuser',
+
+        $response = $this->withSession($this->nonAdminSession($nonAdminId))->post('/employees/save/' . $targetEmployeeId, [
+            'first_name'      => 'Test',
+            'last_name'       => 'Employee',
+            'email'           => 'test@test.com',
+            'username'        => 'testuser',
             'grant_employees' => 'employees',
-            'grant_config' => 'config'
+            'grant_config'    => 'config',
         ]);
-        
-        $employeeModel = model(Employee::class);
+
+        $employeeModel     = model(Employee::class);
         $hasEmployeesGrant = $employeeModel->has_grant('employees', $targetEmployeeId);
-        $hasConfigGrant = $employeeModel->has_grant('config', $targetEmployeeId);
-        
+        $hasConfigGrant    = $employeeModel->has_grant('config', $targetEmployeeId);
+
         $this->assertFalse($hasEmployeesGrant);
         $this->assertFalse($hasConfigGrant);
     }
@@ -140,15 +152,13 @@ class EmployeesControllerTest extends CIUnitTestCase
     public function testAdminCanModifyAnyAccount(): void
     {
         $nonAdminId = $this->createNonAdminEmployee();
-        $this->loginAsAdmin();
-        
-        $response = $this->post('/employees/save/' . $nonAdminId, [
+        $response   = $this->withSession($this->adminSession())->post('/employees/save/' . $nonAdminId, [
             'first_name' => 'Modified',
-            'last_name' => 'User',
-            'email' => 'modified@test.com',
-            'username' => 'nonadmin'
+            'last_name'  => 'User',
+            'email'      => 'modified@test.com',
+            'username'   => 'nonadmin',
         ]);
-        
+
         $response->assertStatus(200);
         $result = json_decode($response->getJSON(), true);
         $this->assertTrue($result['success']);
@@ -157,12 +167,10 @@ class EmployeesControllerTest extends CIUnitTestCase
     public function testAdminCanDeleteAnyAccount(): void
     {
         $nonAdminId = $this->createNonAdminEmployee();
-        $this->loginAsAdmin();
-        
-        $response = $this->post('/employees/delete', [
-            'ids' => [$nonAdminId]
+        $response   = $this->withSession($this->adminSession())->post('/employees/delete', [
+            'ids' => [$nonAdminId],
         ]);
-        
+
         $response->assertStatus(200);
         $result = json_decode($response->getJSON(), true);
         $this->assertTrue($result['success']);
@@ -171,15 +179,13 @@ class EmployeesControllerTest extends CIUnitTestCase
     public function testUserCanModifyOwnAccount(): void
     {
         $nonAdminId = $this->createNonAdminEmployee();
-        $this->loginAsNonAdmin($nonAdminId);
-        
-        $response = $this->post('/employees/save/' . $nonAdminId, [
+        $response   = $this->withSession($this->nonAdminSession($nonAdminId))->post('/employees/save/' . $nonAdminId, [
             'first_name' => 'Modified',
-            'last_name' => 'OwnAccount',
-            'email' => 'own@test.com',
-            'username' => 'nonadmin'
+            'last_name'  => 'OwnAccount',
+            'email'      => 'own@test.com',
+            'username'   => 'nonadmin',
         ]);
-        
+
         $response->assertStatus(200);
         $result = json_decode($response->getJSON(), true);
         $this->assertTrue($result['success']);
@@ -188,32 +194,34 @@ class EmployeesControllerTest extends CIUnitTestCase
     public function testPermissionDelegationRule(): void
     {
         $permissionsRequested = ['customers', 'employees', 'sales', 'config'];
-        $userPermissions = ['customers', 'sales'];
-        $isAdmin = false;
-        
+        $userPermissions      = ['customers', 'sales'];
+        $isAdmin              = false;
+
         $granted = [];
+
         foreach ($permissionsRequested as $perm) {
-            if ($isAdmin || in_array($perm, $userPermissions)) {
+            if ($isAdmin || in_array($perm, $userPermissions, true)) {
                 $granted[] = $perm;
             }
         }
-        
-        $this->assertEquals(['customers', 'sales'], $granted);
+
+        $this->assertSame(['customers', 'sales'], $granted);
     }
 
     public function testAdminCanGrantAnyPermission(): void
     {
         $permissionsRequested = ['customers', 'employees', 'sales', 'config'];
-        $userPermissions = ['customers', 'sales'];
-        $isAdmin = true;
-        
+        $userPermissions      = ['customers', 'sales'];
+        $isAdmin              = true;
+
         $granted = [];
+
         foreach ($permissionsRequested as $perm) {
-            if ($isAdmin || in_array($perm, $userPermissions)) {
+            if ($isAdmin || in_array($perm, $userPermissions, true)) {
                 $granted[] = $perm;
             }
         }
-        
-        $this->assertEquals($permissionsRequested, $granted);
+
+        $this->assertSame($permissionsRequested, $granted);
     }
 }
