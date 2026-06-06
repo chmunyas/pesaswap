@@ -6,6 +6,7 @@ use App\Libraries\Apple_pkpass_lib;
 use App\Libraries\Google_wallet_lib;
 use App\Libraries\MY_Language;
 use App\Libraries\Qr_lib;
+use App\Libraries\Pii_crypto;
 use App\Libraries\Secrets_vault;
 use App\Libraries\Ticket_delivery_lib;
 use App\Libraries\Ticket_issuer;
@@ -169,6 +170,22 @@ class Services extends BaseService
         }
 
         return new Webhook_dispatcher();
+    }
+
+    /**
+     * AES-256-GCM encryption helper for PII columns (email/phone/etc).
+     * Wire format: v01.iv.ciphertext.tag (base64url). Master key from
+     * Secrets_vault under 'pii_master_key'. Pairs with hashLookup() for
+     * deterministic-HMAC sidecar columns when query-by-value is needed
+     * (ent-pii-encryption-rest).
+     */
+    public static function pii_crypto(bool $getShared = true): Pii_crypto
+    {
+        if ($getShared) {
+            return static::getSharedInstance('pii_crypto');
+        }
+
+        return new Pii_crypto();
     }
 
     /**
