@@ -68,6 +68,45 @@ PESASWAP takes the proven OSPOS PHP backend (sales, customers, items, employees,
   </tr>
 </table>
 
+### Gift Cards — WeChat-parity modernization
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/15-giftcards-list.png" alt="Gift card list with design strips" width="100%"><br><sub><b>Gift Cards list</b> — gradient design strips, "Transfer pending" + "Sends DATE" badges, Manage / Gift / Disable actions</sub></td>
+    <td align="center"><img src="docs/screenshots/16-giftcards-create.png" alt="Issue gift card modal" width="100%"><br><sub><b>Issue Gift Card</b> — design picker (6 templates) + preset KES denomination chips + optional scheduled delivery</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/17-giftcards-detail.png" alt="Gift card detail with transfer banner" width="100%"><br><sub><b>Gift card detail</b> — QR + audit history + pending-transfer freeze banner (Redeem/Top-up/Refund/Adjust disabled while transfer pending)</sub></td>
+    <td align="center"><img src="docs/screenshots/24-public-giftcard-transfer.png" alt="Public accept-a-gift page" width="100%"><br><sub><b>/giftcard/transfer/:token</b> — public accept page (no auth). Accepts the gift → server rotates the code, sender's copy stops working.</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/18-giftcards-designs.png" alt="Gift card designs admin" width="100%"><br><sub><b>Designs admin</b> — CRUD gradient templates (background, accent, text, lucide icon) seeded with Classic/Sunset/Forest/Birthday/Holiday/Wedding</sub></td>
+    <td align="center"><img src="docs/screenshots/19-giftcards-denominations.png" alt="Gift card denominations admin" width="100%"><br><sub><b>Denominations admin</b> — preset amounts per currency, snapshotted onto issued cards so later edits don't rewrite history</sub></td>
+  </tr>
+</table>
+
+### Office — Cashups & Expenses
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/25-cashups.png" alt="Cashups lifecycle" width="100%"><br><sub><b>Cashups</b> — open-till / close-till lifecycle. Live "expected cash" from real sales/refunds/expenses; advisory <code>GET_LOCK</code> prevents two terminals opening a shift at once.</sub></td>
+    <td align="center"><img src="docs/screenshots/26-expenses.png" alt="Expenses" width="100%"><br><sub><b>Expenses</b> — date / category / payment-type / employee with monthly total banner.</sub></td>
+  </tr>
+</table>
+
+### Tickets — operations
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/40-tickets-products.png" alt="Ticket products" width="100%"><br><sub><b>Tickets</b> — products + sessions + tiers (meeting / scenic / movie / transport subtypes)</sub></td>
+    <td align="center"><img src="docs/screenshots/44-tickets-dashboard.png" alt="Tickets gate dashboard" width="100%"><br><sub><b>Gate Dashboard</b> — live redemptions + no-shows + per-scanner stats</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/42-tickets-redeem.png" alt="Ticket redemption" width="100%"><br><sub><b>Ticket redemption</b> — JWT-signed QR, single-use enforcement, per-device scanner audit</sub></td>
+    <td align="center"><img src="docs/screenshots/43-public-ticket.png" alt="Public ticket page" width="100%"><br><sub><b>/t/:code</b> — customer ticket page (Apple/Google Wallet passes + ICS calendar)</sub></td>
+  </tr>
+</table>
+
 ### Mobile (customer-facing, public, PWA-installable)
 
 <table>
