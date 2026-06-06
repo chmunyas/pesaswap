@@ -30,6 +30,8 @@ import {
   Flower2,
   Gift,
   Heart,
+  Link2,
+  Link2Off,
   Mail,
   Music4,
   Palette,
@@ -40,6 +42,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Star,
   Trash2,
@@ -59,6 +62,8 @@ import { formatCurrency } from '../lib/utils';
 import { Modal } from '../components/ui/Modal';
 import { showToast } from '../components/ui/Toast';
 import { playNotificationSound } from '../lib/realtime';
+import { BindModal } from '../components/giftcard/BindModal';
+import { giftcardBindingMock, type CardBinding } from '../lib/giftcard-bindings';
 
 type Status = 'active' | 'used' | 'expired' | 'disabled';
 
@@ -350,6 +355,16 @@ export function GiftCardsPage() {
   const [detail, setDetail] = useState<{ card: GiftCard; history: HistoryEntry[] } | null>(null);
   const [deleting, setDeleting] = useState<GiftCard | null>(null);
   const [transferTarget, setTransferTarget] = useState<GiftCard | null>(null);
+  const [bindTarget, setBindTarget] = useState<{ card: GiftCard; prefillPhone?: string | null } | null>(null);
+  // Track NFC binding state per card code (client-side mock).
+  const [bindings, setBindings] = useState<Record<string, CardBinding>>({});
+
+  function refreshBindings() {
+    const all = giftcardBindingMock.list();
+    const map: Record<string, CardBinding> = {};
+    for (const b of all) if (b.status === 'active') map[b.giftcard_code] = b;
+    setBindings(map);
+  }
 
   async function load() {
     setLoading(true);
@@ -388,6 +403,7 @@ export function GiftCardsPage() {
 
   useEffect(() => {
     void loadDesignsAndDenominations();
+    refreshBindings();
   }, []);
 
   async function handleCreate(e: FormEvent) {
@@ -412,12 +428,19 @@ export function GiftCardsPage() {
         denomination_id: createForm.denomination_id ? Number(createForm.denomination_id) : undefined,
         deliver_at: createForm.deliver_at || undefined,
       });
-      const code = res.data?.giftcard ? normalizeGiftCard(res.data.giftcard as Record<string, unknown>).giftcard_number : '';
+      const fresh = res.data?.giftcard ? normalizeGiftCard(res.data.giftcard as Record<string, unknown>) : null;
+      const code = fresh?.giftcard_number ?? '';
       showToast(`Gift card ${code} issued`);
       setShowCreate(false);
       setCreateForm(EMPTY_CREATE);
       playNotificationSound('payment');
       await load();
+      // Post-create prompt to bind to phone (NFC linking flow). Only when a
+      // card object was returned and an email is present (the email signals
+      // we have a real recipient on file).
+      if (fresh && createForm.recipient_email) {
+        setBindTarget({ card: fresh, prefillPhone: null });
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Create failed', 'error');
     } finally {
@@ -530,9 +553,11 @@ export function GiftCardsPage() {
             <GiftCardCard
               key={card.giftcard_id}
               card={card}
+              binding={bindings[card.giftcard_number] ?? null}
               onClick={() => openDetail(card)}
               onDelete={() => setDeleting(card)}
               onTransfer={() => setTransferTarget(card)}
+              onBind={() => setBindTarget({ card, prefillPhone: null })}
             />
           ))}
         </div>
@@ -717,11 +742,21 @@ export function GiftCardsPage() {
         <DetailModal
           key={detail.card.giftcard_id}
           detail={detail}
+          binding={bindings[detail.card.giftcard_number] ?? null}
           onClose={() => setDetail(null)}
           onRefresh={refreshDetail}
           onTransfer={() => {
             setTransferTarget(detail.card);
             setDetail(null);
+          }}
+          onBind={() => {
+            setBindTarget({ card: detail.card, prefillPhone: detail.card.recipient_email ? null : null });
+            setDetail(null);
+          }}
+          onUnbind={async () => {
+            await giftcardBindingMock.unbind(detail.card.giftcard_number);
+            refreshBindings();
+            showToast('Card unlinked from phone');
           }}
         />
       )}
@@ -735,6 +770,19 @@ export function GiftCardsPage() {
             setTransferTarget(null);
             await load();
             showToast('Transfer requested — share the link with the recipient');
+          }}
+        />
+      )}
+
+      {/* Bind-to-phone modal */}
+      {bindTarget && (
+        <BindModal
+          giftcardCode={bindTarget.card.giftcard_number}
+          prefillPhone={bindTarget.prefillPhone}
+          onClose={() => setBindTarget(null)}
+          onBound={() => {
+            refreshBindings();
+            setBindTarget(null);
           }}
         />
       )}
@@ -781,7 +829,7 @@ function StatCard({ label, value, color, warn }: { label: string; value: string;
   );
 }
 
-function GiftCardCard({ card, onClick, onDelete, onTransfer }: { card: GiftCard; onClick: () => void; onDelete: () => void; onTransfer: () => void }) {
+function GiftCardCard({ card, binding, onClick, onDelete, onTransfer, onBind }: { card: GiftCard; binding: CardBinding | null; onClick: () => void; onDelete: () => void; onTransfer: () => void; onBind: () => void }) {
   const style = STATUS_STYLE[card.status];
   const Icon = designIcon(card.design?.icon ?? null);
   const headerGradient = card.design
@@ -820,6 +868,11 @@ function GiftCardCard({ card, onClick, onDelete, onTransfer }: { card: GiftCard;
 
         {/* Status badges */}
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px]">
+          {binding && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
+              <Link2 className="h-3 w-3" /> {giftcardBindingMock.mnoLabel(binding.mno_provider)} {giftcardBindingMock.maskPhone(binding.mobile_number)}
+            </span>
+          )}
           {card.pending_transfer && (
             <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200">
               <UserPlus className="h-3 w-3" /> Transfer pending
@@ -845,6 +898,17 @@ function GiftCardCard({ card, onClick, onDelete, onTransfer }: { card: GiftCard;
           >
             <Pencil className="h-3.5 w-3.5" /> Manage
           </button>
+          {!binding ? (
+            <button
+              type="button"
+              onClick={onBind}
+              disabled={card.status !== 'active'}
+              aria-label="Link to phone"
+              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-900 dark:bg-gray-900 dark:text-emerald-200 dark:hover:bg-emerald-900/20"
+            >
+              <Smartphone className="h-3.5 w-3.5" /> Link
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onTransfer}
@@ -870,14 +934,20 @@ function GiftCardCard({ card, onClick, onDelete, onTransfer }: { card: GiftCard;
 
 function DetailModal({
   detail,
+  binding,
   onClose,
   onRefresh,
   onTransfer,
+  onBind,
+  onUnbind,
 }: {
   detail: { card: GiftCard; history: HistoryEntry[] };
+  binding: CardBinding | null;
   onClose: () => void;
   onRefresh: () => Promise<void>;
   onTransfer: () => void;
+  onBind: () => void;
+  onUnbind: () => Promise<void>;
 }) {
   const { card, history } = detail;
   const [activeAction, setActiveAction] = useState<'' | 'redeem' | 'refund' | 'adjust' | 'topup'>('');
@@ -1060,6 +1130,53 @@ function DetailModal({
             </p>
           </div>
         )}
+
+        {/* NFC binding panel */}
+        <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+          {binding ? (
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <Link2 className="mt-0.5 h-4 w-4 text-emerald-600 dark:text-emerald-300" />
+                <div className="text-xs">
+                  <p className="font-semibold text-gray-900 dark:text-white">
+                    Linked to {giftcardBindingMock.maskPhone(binding.mobile_number)} via {giftcardBindingMock.mnoLabel(binding.mno_provider)}
+                  </p>
+                  <p className="mt-0.5 text-gray-500">
+                    Redemptions will ask this phone to authorise with a PIN before the balance is debited.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void onUnbind()}
+                disabled={busy}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+              >
+                <Link2Off className="h-3 w-3" /> Unlink
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <Smartphone className="mt-0.5 h-4 w-4 text-gray-500" />
+                <div className="text-xs">
+                  <p className="font-semibold text-gray-900 dark:text-white">Bearer card — not linked to a phone</p>
+                  <p className="mt-0.5 text-gray-500">
+                    Anyone with the code can redeem. Link to a phone to require STK-PIN authorisation per redemption.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onBind}
+                disabled={busy || card.status !== 'active'}
+                className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                <Smartphone className="h-3 w-3" /> Link to phone
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Actions row */}
         <div className="grid grid-cols-2 gap-2 md:grid-cols-5">

@@ -192,6 +192,13 @@ export function PublicGiftCardPage() {
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>This is a bearer instrument — anyone with the code can redeem it. Keep it safe.</span>
             </div>
+
+            <a
+              href={`/giftcard/${code}/self-service`}
+              className="mt-3 flex items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-200"
+            >
+              Manage my card → link to phone, disable if lost
+            </a>
           </>
         ) : (
           <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-center dark:border-amber-900 dark:bg-amber-900/20">
