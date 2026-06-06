@@ -187,6 +187,8 @@ $routes->group('api', static function ($routes) {
     $routes->post('tickets/bulk-issue', 'Api\TicketsController::ticketBulkIssue');
     // Admin audit log (ent-admin-audit-log)
     $routes->get('admin/audit-log', 'Api\TicketsController::auditLogIndex');
+    // Prometheus metrics (ent-metrics-prometheus)
+    $routes->get('metrics', 'Api\MetricsController::scrape');
 
     // Tickets — Phase 5: promos + bundles + seat holds + reports
     $routes->get('ticket-promos', 'Api\TicketsController::promoIndex');
