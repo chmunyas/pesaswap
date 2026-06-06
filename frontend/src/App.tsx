@@ -40,6 +40,7 @@ const FxPage                     = lazy(() => import('./pages/FxPage').then((m) 
 const ResetPinPage               = lazy(() => import('./pages/ResetPinPage').then((m) => ({ default: m.ResetPinPage })));
 const PreviewPage                = lazy(() => import('./pages/PreviewPage').then((m) => ({ default: m.PreviewPage })));
 const PublicGiftCardPage         = lazy(() => import('./pages/PublicGiftCardPage').then((m) => ({ default: m.PublicGiftCardPage })));
+const PublicGiftCardWelcomePage  = lazy(() => import('./pages/PublicGiftCardWelcomePage').then((m) => ({ default: m.PublicGiftCardWelcomePage })));
 const PublicGiftCardSelfServicePage = lazy(() => import('./pages/PublicGiftCardSelfServicePage').then((m) => ({ default: m.PublicGiftCardSelfServicePage })));
 const PublicGiftCardTransferPage = lazy(() => import('./pages/PublicGiftCardTransferPage').then((m) => ({ default: m.PublicGiftCardTransferPage })));
 const GiftCardDesignsPage        = lazy(() => import('./pages/GiftCardDesignsPage').then((m) => ({ default: m.GiftCardDesignsPage })));
@@ -86,7 +87,12 @@ function AppRoutes() {
         <Route path="/reset-pin" element={<ResetPinPage />} />
         <Route path="/giftcard/:code" element={<PublicGiftCardPage />} />
         <Route path="/giftcard/:code/self-service" element={<PublicGiftCardSelfServicePage />} />
+        <Route path="/giftcard/:code/welcome" element={<PublicGiftCardWelcomePage />} />
         <Route path="/giftcard/transfer/:token" element={<PublicGiftCardTransferPage />} />
+        {/* Short /g/:code alias for SMS/print — same balance + manage page,
+            just easier to type. Welcome ceremony lives under the long path. */}
+        <Route path="/g/:code" element={<PublicGiftCardPage />} />
+        <Route path="/g/:code/welcome" element={<PublicGiftCardWelcomePage />} />
         <Route path="/ticket/:code" element={<PublicTicketPage />} />
         <Route path="/preview" element={<PreviewPage />} />
         <Route path="/preview/*" element={<PreviewPage />} />

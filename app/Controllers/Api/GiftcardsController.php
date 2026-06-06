@@ -768,6 +768,13 @@ class GiftcardsController extends BaseApiController
                 'status' => $isValid ? 'active' : 'inactive',
                 'valid' => $isValid,
                 'expires_at' => $row['expires_at'] ?? null,
+                // Personalisation fields for the recipient ceremony at
+                // /g/:code/welcome. Safe to expose because anyone with the
+                // bearer code already has full redemption rights — these
+                // strings are purely cosmetic context for the ritual.
+                'recipient_name' => $row['recipient_name'] ?? null,
+                'sender_name' => $row['sender_name'] ?? null,
+                'message' => $row['message'] ?? null,
                 'history' => $history,
             ]);
         } catch (Throwable $e) {

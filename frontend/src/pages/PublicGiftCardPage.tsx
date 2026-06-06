@@ -19,8 +19,11 @@ import {
   Clock,
   CreditCard,
   Mail,
+  Maximize2,
   RotateCcw,
+  Settings,
   ShieldCheck,
+  X as XIcon,
 } from 'lucide-react';
 import { QRCode } from 'react-qr-code';
 import { api } from '../lib/api';
@@ -70,6 +73,11 @@ export function PublicGiftCardPage() {
   const [lookup, setLookup] = useState<PublicLookup | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Full-screen "show to cashier" mode. Inverts the WeChat scan: instead
+  // of the cashier raising their device, the customer turns their phone
+  // around. Faster on busy counters where the customer is already holding
+  // their phone.
+  const [showFullQR, setShowFullQR] = useState(false);
 
   async function load() {
     if (!code) return;
@@ -109,11 +117,22 @@ export function PublicGiftCardPage() {
       style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1rem)' }}
     >
       <div className="mx-auto w-full max-w-sm space-y-5 pt-8">
-        <div className="text-center">
+        <div className="flex items-center justify-between">
           <div className="inline-flex items-center gap-2 rounded-full bg-gray-900 text-white px-4 py-2 dark:bg-white dark:text-gray-900">
             <CreditCard className="h-4 w-4" />
             <span className="text-sm font-bold font-mono">PESASWAP · Gift Card</span>
           </div>
+          {/* Manage gear — surfaces self-service without burying it in a
+              banner CTA. Hidden until a valid card loads. */}
+          {lookup?.valid && (
+            <a
+              href={`/giftcard/${code}/self-service`}
+              aria-label="Manage card"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+            >
+              <Settings className="h-4 w-4" />
+            </a>
+          )}
         </div>
 
         {loading ? (
@@ -151,13 +170,22 @@ export function PublicGiftCardPage() {
               )}
             </div>
 
-            {/* QR */}
-            <div className="rounded-3xl border border-gray-200 bg-white p-4 text-center shadow-sm dark:border-gray-700 dark:bg-gray-900">
-              <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">Scan to redeem in-store</p>
+            {/* QR — tap to enlarge for the cashier to scan from across the counter. */}
+            <button
+              type="button"
+              onClick={() => setShowFullQR(true)}
+              className="block w-full rounded-3xl border border-gray-200 bg-white p-4 text-center shadow-sm transition active:scale-[0.99] dark:border-gray-700 dark:bg-gray-900"
+            >
+              <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">
+                Tap to show cashier
+              </p>
               <div className="mx-auto mt-3 aspect-square w-48 rounded-xl bg-white p-3">
                 <QRCode value={code ?? ''} size={160} style={{ width: '100%', height: '100%' }} />
               </div>
-            </div>
+              <p className="mt-2 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600">
+                <Maximize2 className="h-3 w-3" /> Full screen
+              </p>
+            </button>
 
             {/* Recent activity */}
             <div className="rounded-3xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900">
@@ -192,13 +220,6 @@ export function PublicGiftCardPage() {
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>This is a bearer instrument — anyone with the code can redeem it. Keep it safe.</span>
             </div>
-
-            <a
-              href={`/giftcard/${code}/self-service`}
-              className="mt-3 flex items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700 hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-900/20 dark:text-blue-200"
-            >
-              Manage my card → link to phone, disable if lost
-            </a>
           </>
         ) : (
           <div className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-center dark:border-amber-900 dark:bg-amber-900/20">
@@ -219,6 +240,40 @@ export function PublicGiftCardPage() {
           Need help? Contact the merchant who issued this card.
         </p>
       </div>
+
+      {/* Full-screen "show to cashier" overlay — large QR, dark background,
+          single dismiss button. Inverts the WeChat scan: customer's screen
+          becomes the merchant's target instead of the merchant's camera
+          becoming the customer's target. */}
+      {showFullQR && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-900 p-6"
+          role="dialog"
+          aria-label="Full-screen gift card QR code"
+          onClick={() => setShowFullQR(false)}
+        >
+          <button
+            type="button"
+            onClick={() => setShowFullQR(false)}
+            className="absolute right-5 top-5 inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur hover:bg-white/20"
+            aria-label="Close"
+          >
+            <XIcon className="h-5 w-5" />
+          </button>
+          <div className="rounded-3xl bg-white p-5 shadow-2xl">
+            <QRCode value={code ?? ''} size={280} style={{ width: '280px', height: '280px' }} />
+          </div>
+          <p className="mt-6 text-center text-xs font-mono uppercase tracking-widest text-white/70">
+            {lookup?.masked_code}
+          </p>
+          <p className="mt-2 text-center text-sm text-white/90">
+            {lookup?.currency} {lookup?.balance?.toLocaleString()}
+          </p>
+          <p className="mt-8 text-center text-[11px] text-white/50">
+            Tap anywhere to dismiss
+          </p>
+        </div>
+      )}
     </div>
   );
 }
