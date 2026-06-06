@@ -187,6 +187,10 @@ $routes->group('api', static function ($routes) {
     $routes->post('tickets/bulk-issue', 'Api\TicketsController::ticketBulkIssue');
     // Admin audit log (ent-admin-audit-log)
     $routes->get('admin/audit-log', 'Api\TicketsController::auditLogIndex');
+    // GDPR DSAR + erasure (ent-gdpr-erasure)
+    $routes->post('admin/gdpr/lookup', 'Api\GdprController::lookup');
+    $routes->post('admin/gdpr/export', 'Api\GdprController::export');
+    $routes->post('admin/gdpr/erase', 'Api\GdprController::erase');
     // Prometheus metrics (ent-metrics-prometheus)
     $routes->get('metrics', 'Api\MetricsController::scrape');
     // Health + readiness (ent-graceful-shutdown)
