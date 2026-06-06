@@ -2920,6 +2920,222 @@ class GiftcardsController extends BaseApiController
         ], 'OK');
     }
 
+    /**
+     * Public: send an OTP to the bound phone of a gift card so the
+     * holder can authenticate a "re-gift to a friend" transfer without
+     * a merchant operator. The OTP is cache-backed (NOT the giftcard_otps
+     * table — that ENUM is fixed to unbind/disable and we don't want to
+     * migrate it for one new action).
+     *
+     * Mounted at POST /api/public/giftcards/:code/transfer/send-otp
+     *
+     * Returns { masked_phone, expires_at, demo_code? }.
+     *
+     * Requirements:
+     *   - Card status must be ACTIVE.
+     *   - Card must have an active phone binding (no binding = no phone
+     *     to authenticate against = no public transfer; the holder must
+     *     ask the merchant to bind first, or transfer the bearer code
+     *     directly).
+     *   - No pending transfer on the card (one in-flight at a time).
+     */
+    public function publicTransferSendOtp(string $code): ResponseInterface
+    {
+        $normalized = strtoupper(trim($code));
+        if (!preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid gift card code.', 422);
+        }
+        if (!$this->publicTransferRateLimit('gc_xfer_otp_send', 5)) {
+            return $this->respondError('Too many OTP requests.', 429);
+        }
+
+        $card = $this->lookupCardByCode($normalized);
+        if ($card === null) return $this->respondError('Gift card not found.', 404);
+        if ($this->computeStatus($card) !== self::STATUS_ACTIVE) {
+            return $this->respondError('Only active gift cards can be transferred.', 409);
+        }
+        if ($this->hasPendingTransferUnderLock((int)$card['giftcard_id'])) {
+            return $this->respondError('A transfer is already pending for this gift card.', 409);
+        }
+
+        $binding = $this->db->table('giftcard_bindings')
+            ->where('giftcard_id', (int)$card['giftcard_id'])
+            ->where('status', 'active')
+            ->where('deleted', 0)
+            ->get()
+            ->getRowArray();
+        if ($binding === null) {
+            return $this->respondError('This card has no linked phone — only the merchant can transfer unlinked cards.', 409);
+        }
+
+        $plain = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $otpHash = hash('sha256', $plain);
+        $ttl = max(60, self::OTP_TTL_MIN * 60);
+        $expires = date('Y-m-d H:i:s', time() + $ttl);
+
+        try {
+            service('cache')->save('gc_xfer_otp_' . hash('sha256', $normalized), [
+                'otp_hash'   => $otpHash,
+                'giftcard_id'=> (int)$card['giftcard_id'],
+                'attempts'   => 0,
+                'expires_at' => $expires,
+            ], $ttl);
+        } catch (Throwable $e) {
+            log_message('error', 'publicTransferSendOtp cache — ' . $e->getMessage());
+            return $this->respondError('Could not queue OTP. Try again.', 503);
+        }
+
+        $inline = (string)$this->getAppConfig('giftcard_otp_inline_return', '1') === '1';
+        return $this->respondSuccess([
+            'masked_phone' => $this->maskPhoneServer((string)$binding['mobile_number']),
+            'expires_at'   => $expires,
+            'demo_code'    => $inline ? $plain : null,
+        ], 'OTP sent to the linked phone.');
+    }
+
+    /**
+     * Public: confirm a sender-initiated transfer. Verifies the OTP that
+     * was sent by publicTransferSendOtp(), then runs the same atomic
+     * transfer creation as the operator-side transferRequest() — minus
+     * the auth + employee_id stamp.
+     *
+     * Mounted at POST /api/public/giftcards/:code/transfer/confirm
+     *   { code, to_recipient_name?, to_recipient_phone?, message?, idempotency_key? }
+     *
+     * Returns { accept_url, verification_token, expires_at } on success.
+     * The verification_token is a 6-word memorable phrase, returned ONCE
+     * — never stored, never re-derivable.
+     */
+    public function publicTransferConfirm(string $code): ResponseInterface
+    {
+        $normalized = strtoupper(trim($code));
+        if (!preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid gift card code.', 422);
+        }
+        $body = $this->request->getJSON(true) ?? [];
+        $otp = trim((string)($body['code'] ?? ''));
+        if (!preg_match('/^\d{6}$/', $otp)) {
+            return $this->respondError('Enter the 6-digit OTP.', 422);
+        }
+        if (!$this->publicTransferRateLimit('gc_xfer_otp_verify', 10)) {
+            return $this->respondError('Too many attempts.', 429);
+        }
+
+        $cacheKey = 'gc_xfer_otp_' . hash('sha256', $normalized);
+        $cache = service('cache');
+        $entry = $cache->get($cacheKey);
+        if (!is_array($entry) || empty($entry['otp_hash'])) {
+            return $this->respondError('Code expired. Request a new one.', 403);
+        }
+        $attempts = (int)($entry['attempts'] ?? 0);
+        if ($attempts >= 5) {
+            $cache->delete($cacheKey);
+            return $this->respondError('Too many wrong attempts. Request a new code.', 403);
+        }
+        if (!hash_equals((string)$entry['otp_hash'], hash('sha256', $otp))) {
+            $entry['attempts'] = $attempts + 1;
+            $cache->save($cacheKey, $entry, max(60, strtotime((string)$entry['expires_at']) - time()));
+            return $this->respondError('Wrong code. ' . (5 - $entry['attempts']) . ' attempt(s) left.', 403);
+        }
+        $cache->delete($cacheKey);
+        $giftcardId = (int)$entry['giftcard_id'];
+
+        // Body data for the new transfer recipient.
+        $toName    = trim((string)($body['to_recipient_name'] ?? ''));
+        $toPhoneR  = trim((string)($body['to_recipient_phone'] ?? ''));
+        $toPhone   = (string)preg_replace('/[\s().\-_]/', '', $toPhoneR);
+        if ($toPhone !== '' && !preg_match('/^\+?\d{9,15}$/', $toPhone)) {
+            return $this->respondError('Recipient phone must be 9-15 digits.', 422);
+        }
+        $message = mb_substr(trim((string)($body['message'] ?? '')), 0, 280);
+        $idemKey = mb_substr((string)($body['idempotency_key'] ?? bin2hex(random_bytes(8))), 0, 64);
+
+        try {
+            $this->db->transStart();
+            $giftcardsTable = $this->db->prefixTable('giftcards');
+            $card = $this->db->query(
+                "SELECT * FROM {$giftcardsTable} WHERE giftcard_id = ? AND deleted = 0 LIMIT 1 FOR UPDATE",
+                [$giftcardId],
+            )->getRowArray();
+            if ($card === null) {
+                $this->db->transComplete();
+                return $this->respondError('Gift card not found.', 404);
+            }
+            if ($this->computeStatus($card) !== self::STATUS_ACTIVE) {
+                $this->db->transComplete();
+                return $this->respondError('Only active gift cards can be transferred.', 409);
+            }
+
+            // Idempotency: same key → return the prior transfer (but
+            // never re-reveal the verification_token, which is one-shot).
+            $prior = $this->db->table('giftcard_transfers')
+                ->where('giftcard_id', $giftcardId)
+                ->where('client_idempotency_key', $idemKey)
+                ->get()
+                ->getRowArray();
+            if ($prior !== null) {
+                $this->db->transComplete();
+                return $this->respondSuccess([
+                    'transfer' => $this->decorateTransfer($prior),
+                    'verification_token' => null,
+                    'message' => 'Existing transfer returned (idempotent).',
+                ]);
+            }
+
+            if ($this->hasPendingTransferUnderLock($giftcardId)) {
+                $this->db->transComplete();
+                return $this->respondError('A transfer is already pending for this gift card.', 409);
+            }
+
+            $token = MemorablePhrase::generate();
+            $tokenHash = hash('sha256', $token);
+            $ttlHours = max(1, self::TRANSFER_TOKEN_TTL_HOURS);
+            $expires = date('Y-m-d H:i:s', time() + $ttlHours * 3600);
+
+            $this->db->table('giftcard_transfers')->insert([
+                'giftcard_id'              => $giftcardId,
+                'initiated_by_employee_id' => null,
+                'channel'                  => 'link',
+                'to_recipient_name'        => $toName !== '' ? mb_substr($toName, 0, 255) : null,
+                'to_recipient_email'       => null,
+                'to_recipient_phone'       => $toPhone !== '' ? mb_substr($toPhone, 0, 64) : null,
+                'message'                  => $message !== '' ? $message : null,
+                'verification_token_hash'  => $tokenHash,
+                'verification_expires_at'  => $expires,
+                'balance_at_request'       => (string)$card['value'],
+                'old_code_masked'          => $this->maskCode((string)$card['giftcard_number']),
+                'ip'                       => $this->request->getIPAddress() ?: null,
+                'user_agent'               => mb_substr((string)$this->request->getUserAgent(), 0, 255),
+                'client_idempotency_key'   => $idemKey,
+            ]);
+            $transferId = (int)$this->db->insertID();
+
+            $this->writeHistory($giftcardId, [
+                'action'         => self::ACTION_TRANSFER_REQUESTED,
+                'amount'         => '0.00',
+                'balance_before' => (string)$card['value'],
+                'balance_after'  => (string)$card['value'],
+                'comment'        => 'Transfer requested by recipient (public/OTP, #' . $transferId . ', expires ' . $expires . ')',
+            ]);
+
+            $this->db->transComplete();
+            if (!$this->db->transStatus()) {
+                return $this->respondError('Failed to create transfer.', 500);
+            }
+
+            $fresh = $this->db->table('giftcard_transfers')->where('transfer_id', $transferId)->get()->getRowArray();
+            return $this->respondSuccess([
+                'transfer'           => $this->decorateTransfer($fresh ?? []),
+                'verification_token' => $token,
+                'accept_url'         => '/giftcard/transfer/' . $token,
+                'expires_at'         => $expires,
+            ], 'Transfer requested.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'publicTransferConfirm — ' . $e->getMessage());
+            return $this->respondError('Failed to create transfer.', 500);
+        }
+    }
+
     // ---------- Helpers ----------
 
     /**

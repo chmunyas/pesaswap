@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   Clock,
   CreditCard,
+  Gift,
   Mail,
   Maximize2,
   RotateCcw,
@@ -27,6 +28,7 @@ import {
 } from 'lucide-react';
 import { QRCode } from 'react-qr-code';
 import { api } from '../lib/api';
+import { SendToFriendModal } from '../components/giftcard/SendToFriendModal';
 
 interface PublicHistoryEntry {
   action: string;
@@ -78,6 +80,7 @@ export function PublicGiftCardPage() {
   // around. Faster on busy counters where the customer is already holding
   // their phone.
   const [showFullQR, setShowFullQR] = useState(false);
+  const [showRegift, setShowRegift] = useState(false);
 
   // Escape closes the full-screen QR overlay (keyboard accessibility).
   useEffect(() => {
@@ -195,6 +198,18 @@ export function PublicGiftCardPage() {
               <p className="mt-2 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600">
                 <Maximize2 className="h-3 w-3" /> Full screen
               </p>
+            </button>
+
+            {/* Send to a friend — public OTP-gated transfer. Only useful
+                when the card has an active phone binding; the backend
+                refuses with a friendly 409 otherwise. */}
+            <button
+              type="button"
+              onClick={() => setShowRegift(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-pink-200 bg-gradient-to-r from-pink-50 to-amber-50 px-4 py-3 text-sm font-bold text-pink-700 hover:from-pink-100 hover:to-amber-100 dark:border-pink-900 dark:from-pink-900/30 dark:to-amber-900/30 dark:text-pink-200"
+            >
+              <Gift className="h-4 w-4" />
+              Send to a friend
             </button>
 
             {/* Recent activity */}
@@ -332,6 +347,11 @@ export function PublicGiftCardPage() {
             Tap anywhere to dismiss
           </p>
         </div>
+      )}
+
+      {/* Send-to-a-friend modal — OTP-gated public transfer. */}
+      {showRegift && code && (
+        <SendToFriendModal code={code} onClose={() => setShowRegift(false)} />
       )}
     </div>
   );

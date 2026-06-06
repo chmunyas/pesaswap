@@ -197,6 +197,22 @@ class PublicController extends BaseApiController
         return $this->delegateToGiftcards('publicListCardsByPhone');
     }
 
+    /**
+     * Sender re-gift (Slice E.3) — OTP-gated public transfer.
+     *
+     * POST /api/public/giftcards/:code/transfer/send-otp — send OTP to bound phone.
+     * POST /api/public/giftcards/:code/transfer/confirm  — verify + mint memorable phrase.
+     */
+    public function giftcardTransferSendOtp(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicTransferSendOtp', $code);
+    }
+
+    public function giftcardTransferConfirm(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicTransferConfirm', $code);
+    }
+
     private function delegateToGiftcards(string $method, string ...$args): ResponseInterface
     {
         $gc = new GiftcardsController();
