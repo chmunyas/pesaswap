@@ -204,4 +204,32 @@
             <?php endforeach; ?>
         </div>
     <?php endif; ?>
+
+    <?php
+    // "Send a gift back" QR — opens the customer-facing gift-card issue
+    // page with a query parameter the front-end can use to prefill the
+    // receipt source. Lets a happy customer scan their receipt and
+    // send a card to a friend in one tap. Skip when disabled.
+    $regiftRow = db_connect()
+        ->table('app_config')
+        ->where('key', 'receipt_regift_qr_enabled')
+        ->get()
+        ->getRowArray();
+    $regiftEnabled = !$regiftRow || (string) $regiftRow['value'] !== '0';
+    if ($regiftEnabled && !empty($sale_id) && service('qr_lib')):
+        $qrLib    = service('qr_lib');
+        $regiftUrl = rtrim(base_url('giftcards'), '/') . '?from_receipt=' . (int) $sale_id;
+    ?>
+        <div id="regift_qr" style="margin-top: 16px; padding-top: 12px; border-top: 1px dashed #999; text-align: center; page-break-inside: avoid;">
+            <div style="font-weight: bold; margin-bottom: 4px;">
+                <?= lang('Sales.send_a_gift') ?: 'Send a gift back' ?>
+            </div>
+            <div style="display: inline-block; width: 140px;">
+                <?= $qrLib->generate_svg($regiftUrl, ['scale' => 3]) ?>
+            </div>
+            <div style="font-size: 10px; color: #555; margin-top: 4px;">
+                <?= lang('Sales.send_a_gift_back_hint') ?: 'Scan to gift a friend' ?>
+            </div>
+        </div>
+    <?php endif; ?>
 </div>

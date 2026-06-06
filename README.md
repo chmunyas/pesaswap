@@ -139,8 +139,9 @@ Each PNG is a single-page walk-through with step-by-step instructions, embedded 
     <td align="center" width="25%"><a href="docs/use-cases/12-sender-regift.png"><img src="docs/use-cases/12-sender-regift.png" alt="Use case 12 — Sender re-gift" width="100%"></a><br><sub><b>12. Re-gift to a friend</b> ✨ — recipient-initiated transfer from <code>/g/:code</code>, OTP via bound phone</sub></td>
   </tr>
   <tr>
-    <td align="center" width="25%"><a href="docs/use-cases/13-gift-drop.png"><img src="docs/use-cases/13-gift-drop.png" alt="Use case 13 — Gift Drop (hongbao)" width="100%"></a><br><sub><b>13. Gift Drop (hongbao)</b> ✨ <em>new</em> — one card → one share link → N slices for the first N to claim (equal or random)</sub></td>
-    <td colspan="3"></td>
+    <td align="center" width="25%"><a href="docs/use-cases/13-gift-drop.png"><img src="docs/use-cases/13-gift-drop.png" alt="Use case 13 — Gift Drop (hongbao)" width="100%"></a><br><sub><b>13. Gift Drop (hongbao)</b> ✨ — one card → one share link → N slices for the first N to claim (equal or random)</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/14-lifecycle-nudges.png"><img src="docs/use-cases/14-lifecycle-nudges.png" alt="Use case 14 — Lifecycle nudges" width="100%"></a><br><sub><b>14. Lifecycle nudges</b> ✨ <em>new</em> — <code>php spark giftcards:nudge</code> expiry + idle SMS reminders + receipt re-gift QR</sub></td>
+    <td colspan="2"></td>
   </tr>
 </table>
 
