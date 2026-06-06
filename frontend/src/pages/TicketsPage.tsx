@@ -1160,10 +1160,21 @@ function InstancesTab() {
     try {
       if (target === 'revoke') {
         await api.tickets.revoke(detail.ticket.ticket_id, { reason });
+        showToast('Revoked');
       } else {
-        await api.tickets.refund(detail.ticket.ticket_id, { reason });
+        const res = await api.tickets.refund(detail.ticket.ticket_id, { reason });
+        const data = res.data as { refund_amount?: string; reversed_tenders?: Array<{ payment_type: string; amount: string; kind: string; txn_status: string }> } | undefined;
+        const amount = data?.refund_amount ?? '0.00';
+        const tenders = data?.reversed_tenders ?? [];
+        if (tenders.length === 0) {
+          showToast(`Refunded (manual issuance — no tender to reverse)`);
+        } else {
+          const summary = tenders
+            .map((t) => `${t.payment_type} ${t.amount} (${t.kind === 'mno' ? '✓' : 'pending'})`)
+            .join(' · ');
+          showToast(`Refunded ${amount} — ${summary}`);
+        }
       }
-      showToast(`${target} ok`);
       await refreshDetail();
     } catch (err) {
       showToast(err instanceof Error ? err.message : `${target} failed`, 'error');
@@ -1372,7 +1383,7 @@ function InstancesTab() {
             {/* Actions */}
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => action('revoke', 'Operator revoked')} disabled={!['issued', 'active'].includes(detail.ticket.status)} className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-900 dark:bg-gray-900 dark:text-rose-300">Revoke</button>
-              <button type="button" onClick={() => action('refund', 'Operator refunded')} disabled={!['active'].includes(detail.ticket.status)} className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-900 dark:bg-gray-900 dark:text-amber-300">Refund</button>
+              <button type="button" onClick={() => action('refund', 'Operator refunded')} disabled={!['issued', 'active'].includes(detail.ticket.status)} className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-900 dark:bg-gray-900 dark:text-amber-300">Refund</button>
             </div>
 
             {/* Redemption log */}

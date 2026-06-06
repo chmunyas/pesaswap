@@ -48,7 +48,7 @@ class TicketsController extends BaseApiController
     private const ALLOWED_VALIDITY_MODES = ['fixed', 'relative'];
     private const ALLOWED_ISSUE_REASONS  = ['comp', 'replacement', 'gift', 'test', 'migration', 'manual'];
     private const STATUS_TRANSITIONS     = [
-        'issued'   => ['active', 'revoked', 'expired'],
+        'issued'   => ['active', 'revoked', 'refunded', 'expired'],
         'active'   => ['redeemed', 'revoked', 'refunded', 'expired'],
         'redeemed' => [],
         'refunded' => [],
@@ -593,9 +593,283 @@ class TicketsController extends BaseApiController
         return $this->transitionStatus($id, 'revoked', 'reason');
     }
 
+    /**
+     * Refund a ticket - flips status='refunded' AND reverses the original
+     * tender (Phase 5: ent-mno-refund / phase5-refund-mno).
+     *
+     * Looks up the sale's sales_payments rows, splits the ticket value
+     * proportionally across each payment_type (so a $50 ticket on a $200
+     * sale paid 50% M-Pesa + 50% cash gets a $25 MNO reversal + $25
+     * pending-cash payout), and records each reversed tender in
+     * ticket_refund_payments for audit + retry.
+     *
+     * For mobile-money providers (mpesa/airtel/mtn_momo) it generates a
+     * mock transaction_id and marks txn_status='completed' (matching the
+     * gift-cards topup convention - a real MNO integration replaces the
+     * mock with an actual REST call). For Cash/Card/Cheque/Other it
+     * records the row with txn_status='pending' so the operator knows to
+     * hand over physical cash / process a card reversal manually.
+     *
+     * Tickets without a sale (manual issuance) skip the tender reversal
+     * but still flip status.
+     *
+     * Body: { reason: string, amount?: decimal }
+     *   amount defaults to the ticket's full unit_price (item.unit_price);
+     *   for partial refunds the caller may pass a smaller amount that
+     *   gets pro-rated across tenders.
+     */
     public function ticketRefund(int $id): ResponseInterface
     {
-        return $this->transitionStatus($id, 'refunded', 'reason');
+        if ($auth = $this->requireAuth()) {
+            return $auth;
+        }
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+
+        $body         = $this->request->getJSON(true) ?? [];
+        $reason       = mb_substr(trim((string) ($body['reason'] ?? '')), 0, 255);
+        $requestedAmt = isset($body['amount']) && $body['amount'] !== '' ? $this->parseMoney($body['amount']) : null;
+        $employeeId   = (int) ($this->session->get('person_id') ?? 0);
+
+        try {
+            $this->db->transBegin();
+
+            $ticketsTable = $this->db->prefixTable('tickets');
+            $row          = $this->db->query(
+                "SELECT * FROM {$ticketsTable} WHERE ticket_id = ? AND deleted = 0 LIMIT 1 FOR UPDATE",
+                [$id],
+            )->getRowArray();
+            if ($row === null) {
+                $this->db->transRollback();
+
+                return $this->respondError('Ticket not found.', 404);
+            }
+            $current = (string) $row['status'];
+            if (! in_array('refunded', self::STATUS_TRANSITIONS[$current] ?? [], true)) {
+                $this->db->transRollback();
+
+                return $this->respondError("Cannot refund a ticket in state {$current}.", 409);
+            }
+
+            // Resolve refund amount: caller override, else line unit_price, else 0
+            $refundAmount = $requestedAmt ?? $this->resolveTicketLineAmount($row);
+            if ($refundAmount === null || bccomp($refundAmount, '0.00', 2) <= 0) {
+                $refundAmount = '0.00';
+            }
+
+            // Reverse tenders (when there's a sale + amount > 0)
+            $reversedRows = [];
+            if (! empty($row['sale_id']) && bccomp($refundAmount, '0.00', 2) > 0 && $this->db->tableExists('ticket_refund_payments')) {
+                $reversedRows = $this->reverseTenders(
+                    (int) $row['ticket_id'],
+                    (int) $row['sale_id'],
+                    $refundAmount,
+                    $employeeId,
+                );
+            }
+
+            // Flip status
+            $this->db->table('tickets')->where('ticket_id', $id)->update(['status' => 'refunded']);
+
+            // Audit row in ticket_redemptions for parity with revoke/expire paths.
+            $this->db->table('ticket_redemptions')->insert([
+                'ticket_id'   => $id,
+                'employee_id' => $employeeId,
+                'result'      => 'refunded',
+                'notes'       => mb_substr('refunded:' . ($reason !== '' ? $reason : 'no reason')
+                    . ' amount=' . $refundAmount
+                    . ' tenders=' . count($reversedRows), 0, 255),
+            ]);
+
+            if (! $this->db->transCommit()) {
+                return $this->respondError('Refund transaction failed.', 500);
+            }
+
+            $fresh = $this->loadTicketRow($id);
+
+            return $this->respondSuccess([
+                'ticket'           => $fresh ? $this->decorateTicket($fresh) : null,
+                'refund_amount'    => $refundAmount,
+                'reversed_tenders' => $reversedRows,
+            ], 'Ticket refunded.');
+        } catch (Throwable $e) {
+            try {
+                $this->db->transRollback();
+            } catch (Throwable $ignore) {
+            }
+            log_message('error', 'TicketsController::ticketRefund — ' . $e->getMessage());
+
+            return $this->respondError('Failed to refund ticket: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * Pro-rate $refundAmount across the sale's sales_payments rows by each
+     * tender's share of the original sale, write one ticket_refund_payments
+     * row per tender, and for MNO providers mint a mock transaction_id.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function reverseTenders(int $ticketId, int $saleId, string $refundAmount, int $employeeId): array
+    {
+        $paymentsTable = $this->db->prefixTable('sales_payments');
+        $payments      = $this->db->query(
+            "SELECT payment_type, payment_amount, cash_refund, reference_code
+             FROM {$paymentsTable}
+             WHERE sale_id = ?
+             ORDER BY payment_id ASC",
+            [$saleId],
+        )->getResultArray();
+
+        if ($payments === []) {
+            return [];
+        }
+
+        // Total paid (net of any existing cash_refund) for proportional split.
+        $totalPaid = '0.00';
+
+        foreach ($payments as $p) {
+            $net       = bcsub((string) ($p['payment_amount'] ?? '0'), (string) ($p['cash_refund'] ?? '0'), 2);
+            $totalPaid = bcadd($totalPaid, $net, 2);
+        }
+        if (bccomp($totalPaid, '0.00', 2) <= 0) {
+            return [];
+        }
+
+        $reversed  = [];
+        $allocated = '0.00';
+        $lastIdx   = count($payments) - 1;
+
+        foreach ($payments as $idx => $p) {
+            $type  = (string) $p['payment_type'];
+            $net   = bcsub((string) ($p['payment_amount'] ?? '0'), (string) ($p['cash_refund'] ?? '0'), 2);
+            $share = bcdiv($net, $totalPaid, 6);
+
+            // Last row absorbs rounding drift so the sum exactly matches refundAmount.
+            if ($idx === $lastIdx) {
+                $portion = bcsub($refundAmount, $allocated, 2);
+            } else {
+                $portion = bcmul($refundAmount, $share, 2);
+            }
+            if (bccomp($portion, '0.00', 2) <= 0) {
+                continue;
+            }
+            $allocated = bcadd($allocated, $portion, 2);
+
+            [$provider, $kind] = $this->classifyTender($type);
+            $isMno             = $kind === 'mno';
+
+            $row = [
+                'ticket_id'      => $ticketId,
+                'sale_id'        => $saleId,
+                'payment_type'   => mb_substr($type, 0, 40),
+                'provider'       => $provider,
+                'amount'         => $portion,
+                'transaction_id' => $isMno ? $this->mockTransactionId(strtoupper($provider ?? 'MNO') . '-REV') : null,
+                'reference'      => $p['reference_code'] !== null && $p['reference_code'] !== '' ? mb_substr((string) $p['reference_code'], 0, 64) : null,
+                'txn_status'     => $isMno ? 'completed' : 'pending',
+                'kind'           => $kind,
+                'employee_id'    => $employeeId,
+            ];
+            $this->db->table('ticket_refund_payments')->insert($row);
+            $row['refund_payment_id'] = (int) $this->db->insertID();
+            $reversed[]               = $row;
+        }
+
+        return $reversed;
+    }
+
+    /**
+     * Maps a payment_type string (free-form per OSPOS) to a normalised
+     * provider + kind (mno vs manual). The matching is case-insensitive
+     * and substring-based to handle 'Cash', 'Cash 10.00' (legacy
+     * concatenated display strings), 'M-Pesa', 'mpesa', etc.
+     *
+     * @return array{0:?string,1:string} [provider, kind]
+     */
+    private function classifyTender(string $type): array
+    {
+        $t = strtolower($type);
+        if (str_contains($t, 'mpesa') || str_contains($t, 'm-pesa') || str_contains($t, 'm pesa')) {
+            return ['mpesa', 'mno'];
+        }
+        if (str_contains($t, 'airtel')) {
+            return ['airtel', 'mno'];
+        }
+        if (str_contains($t, 'mtn') || str_contains($t, 'momo')) {
+            return ['mtn_momo', 'mno'];
+        }
+        if (str_contains($t, 'card') || str_contains($t, 'credit') || str_contains($t, 'debit')) {
+            return ['card', 'manual'];
+        }
+        if (str_contains($t, 'bank') || str_contains($t, 'transfer')) {
+            return ['bank', 'manual'];
+        }
+        if (str_contains($t, 'cheque') || str_contains($t, 'check')) {
+            return ['cheque', 'manual'];
+        }
+
+        // Default: treat as cash / generic manual cashout.
+        return ['cash', 'manual'];
+    }
+
+    /**
+     * Resolve the per-ticket refund amount from the sales_items line that
+     * generated the ticket. Pro-rates by quantity so 1 of 4 tickets on a
+     * line refunds 25% of the line total (after line-level discount).
+     * Returns null when the sale/line can't be resolved.
+     */
+    private function resolveTicketLineAmount(array $ticketRow): ?string
+    {
+        if (empty($ticketRow['sale_id'])) {
+            return null;
+        }
+        $itemsTable = $this->db->prefixTable('sales_items');
+        $row        = $this->db->query(
+            "SELECT quantity_purchased, item_unit_price, discount, discount_type
+             FROM {$itemsTable}
+             WHERE sale_id = ?
+               AND line = (
+                 SELECT MIN(line) FROM {$itemsTable}
+                 WHERE sale_id = ?
+                   AND item_id = (SELECT items.item_id FROM " . $this->db->prefixTable('items') . ' items
+                                  JOIN ' . $this->db->prefixTable('ticket_products') . ' tp ON tp.item_id = items.item_id
+                                  WHERE tp.ticket_product_id = ?)
+               )
+             LIMIT 1',
+            [(int) $ticketRow['sale_id'], (int) $ticketRow['sale_id'], (int) $ticketRow['ticket_product_id']],
+        )->getRowArray();
+        if ($row === null) {
+            return null;
+        }
+        $qty   = (float) ($row['quantity_purchased'] ?? 1);
+        $price = (string) ($row['item_unit_price'] ?? '0');
+        $disc  = (float) ($row['discount'] ?? 0);
+        // Per-unit price after discount (treat discount as percentage by default — matches POS default)
+        $type = (int) ($row['discount_type'] ?? 1);
+        if ($type === 1) {
+            $afterDisc = bcmul($price, (string) (1 - ($disc / 100)), 2);
+        } else {
+            // Flat discount applied per unit (defensive — POS rarely uses flat-per-unit)
+            $afterDisc = bcsub($price, (string) $disc, 2);
+        }
+        if (bccomp($afterDisc, '0.00', 2) < 0) {
+            $afterDisc = '0.00';
+        }
+
+        return $afterDisc;
+    }
+
+    /**
+     * Mock MNO transaction id - same convention as
+     * GiftcardsController::mockTransactionId() so audit reports can
+     * correlate across the two modules. A real MNO integration replaces
+     * the mock with the provider's reversal-API call.
+     */
+    private function mockTransactionId(string $prefix): string
+    {
+        return $prefix . '-' . date('YmdHis') . '-' . bin2hex(random_bytes(3));
     }
 
     /**
