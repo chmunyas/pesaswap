@@ -737,6 +737,16 @@ class TicketsController extends BaseApiController
                 'deliver_phone'  => $deliveryPhone !== '' ? $deliveryPhone : null,
             ]);
 
+            // Webhook fan-out — best-effort enqueue, never blocks the response.
+            service('webhook_dispatcher')->publish('ticket.issued', [
+                'ticket_id'   => (int) $result['ticket']->ticket_id,
+                'code'        => $fresh['code'] ?? null,
+                'product_id'  => $fresh['ticket_product_id'] ?? null,
+                'tier_id'     => $fresh['tier_id'] ?? null,
+                'session_id'  => $fresh['session_id'] ?? null,
+                'customer_id' => $fresh['customer_id'] ?? null,
+            ]);
+
             return $this->respondSuccess([
                 'ticket'         => $fresh ? $this->decorateTicket($fresh) : null,
                 'token'          => $result['token'],
@@ -862,6 +872,14 @@ class TicketsController extends BaseApiController
                     'amount'       => $r['amount'] ?? null,
                     'txn_status'   => $r['txn_status'] ?? null,
                 ], $reversedRows),
+            ]);
+
+            service('webhook_dispatcher')->publish('ticket.refunded', [
+                'ticket_id'     => $id,
+                'code'          => $fresh['code'] ?? null,
+                'refund_amount' => $refundAmount,
+                'reason'        => $reason,
+                'tender_count'  => count($reversedRows),
             ]);
 
             return $this->respondSuccess([
@@ -1099,6 +1117,20 @@ class TicketsController extends BaseApiController
                 if ($row !== null) {
                     $ticket = $this->decorateTicket($row);
                 }
+            }
+
+            // Webhook event for downstream systems (loyalty, BI, etc).
+            // Only fan out on a successful redeem — invalid scans should not
+            // trigger receiver-side noise.
+            if (($result['result'] ?? null) === 'success' && ! empty($result['ticket_id'])) {
+                service('webhook_dispatcher')->publish('ticket.redeemed', [
+                    'ticket_id'   => (int) $result['ticket_id'],
+                    'code'        => $ticket['code'] ?? null,
+                    'employee_id' => $employeeId > 0 ? $employeeId : null,
+                    'device_id'   => $this->scannerDeviceContext['device_id'] ?? null,
+                    'location_id' => $locationId,
+                    'redeemed_at' => date('c'),
+                ]);
             }
 
             return $this->respondSuccess([
@@ -1628,6 +1660,15 @@ class TicketsController extends BaseApiController
 
             $this->auditLog('ticket', $id, $target, $row, $fresh, [
                 'from_status' => $current,
+                'reason'      => $reason,
+            ]);
+
+            // Webhook event: e.g. ticket.revoked, ticket.expired
+            service('webhook_dispatcher')->publish('ticket.' . $target, [
+                'ticket_id'   => $id,
+                'code'        => $fresh['code'] ?? null,
+                'from_status' => $current,
+                'to_status'   => $target,
                 'reason'      => $reason,
             ]);
 

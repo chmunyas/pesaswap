@@ -10,6 +10,7 @@ use App\Libraries\Secrets_vault;
 use App\Libraries\Ticket_delivery_lib;
 use App\Libraries\Ticket_issuer;
 use App\Libraries\Ticket_token_lib;
+use App\Libraries\Webhook_dispatcher;
 use CodeIgniter\Config\BaseService;
 use CodeIgniter\HTTP\IncomingRequest;
 use Config\Services as AppServices;
@@ -154,6 +155,20 @@ class Services extends BaseService
         }
 
         return new Secrets_vault();
+    }
+
+    /**
+     * Webhook fan-out for ticket lifecycle events. publish() enqueues,
+     * dispatchPending() (called from spark tickets:dispatch-webhooks)
+     * does the actual HTTP POST + exponential-backoff retry.
+     */
+    public static function webhook_dispatcher(bool $getShared = true): Webhook_dispatcher
+    {
+        if ($getShared) {
+            return static::getSharedInstance('webhook_dispatcher');
+        }
+
+        return new Webhook_dispatcher();
     }
 
     /**
