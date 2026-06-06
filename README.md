@@ -114,6 +114,11 @@ Each PNG is a single-page walk-through with step-by-step instructions, embedded 
 
 **June 2026 redesign** (Ive ⊕ WeChat principles): the cashier flow collapsed from 7 sections to **3 visible fields + a single "More options" disclosure**. NFC binding folded into issue (one button instead of two), the recipient now lands on a **/g/:code/welcome ceremony page** (1.5s gradient reveal + payment chime), the public balance page has **tap-to-show-cashier full-screen QR** plus **Apple Wallet (.pkpass) + Google Wallet (giftCardObject) passes**, gift cards have **human-readable names** (`Bob → Alice · KES 1,000`), and transfer tokens are now **6-word memorable phrases** (`coral-music-river-jet-vivid-mango`) instead of 32-hex strings.
 
+<p align="center">
+  <a href="docs/use-cases/00-overview.png"><img src="docs/use-cases/00-overview.png" alt="Gift cards — end-to-end overview (Issue → Deliver → Hold → Spend → Re-gift → Protect)" width="100%"></a><br>
+  <sub><b>The full journey on one page</b> — six phases (Issue → Deliver → Hold → Spend → Re-gift → Protect), three principals (cashier · recipient · cashier+recipient), one screen each. Click for full resolution.</sub>
+</p>
+
 <table>
   <tr>
     <td align="center" width="25%"><a href="docs/use-cases/01-issuance.png"><img src="docs/use-cases/01-issuance.png" alt="Use case 1 — Send a gift" width="100%"></a><br><sub><b>1. Send a gift</b> — 3-field form, optional "More" disclosure, inline phone link</sub></td>
