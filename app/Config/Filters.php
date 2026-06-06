@@ -12,6 +12,7 @@ use CodeIgniter\Filters\InvalidChars;
 use CodeIgniter\Filters\PageCache;
 use CodeIgniter\Filters\PerformanceMetrics;
 use CodeIgniter\Filters\SecureHeaders;
+use App\Filters\EnhancedSecureHeaders;
 
 class Filters extends BaseFilters
 {
@@ -25,15 +26,16 @@ class Filters extends BaseFilters
      * or [filter_name => [classname1, classname2, ...]]
      */
     public array $aliases = [
-        'csrf'          => CSRF::class,
-        'toolbar'       => DebugToolbar::class,
-        'honeypot'      => Honeypot::class,
-        'invalidchars'  => InvalidChars::class,
-        'secureheaders' => SecureHeaders::class,
-        'cors'          => Cors::class,
-        'forcehttps'    => ForceHTTPS::class,
-        'pagecache'     => PageCache::class,
-        'performance'   => PerformanceMetrics::class,
+        'csrf'             => CSRF::class,
+        'toolbar'          => DebugToolbar::class,
+        'honeypot'         => Honeypot::class,
+        'invalidchars'     => InvalidChars::class,
+        'secureheaders'    => SecureHeaders::class,
+        'enhancedheaders'  => EnhancedSecureHeaders::class,
+        'cors'             => Cors::class,
+        'forcehttps'       => ForceHTTPS::class,
+        'pagecache'        => PageCache::class,
+        'performance'      => PerformanceMetrics::class,
     ];
 
     /**
@@ -80,6 +82,7 @@ class Filters extends BaseFilters
             'toolbar',
             'honeypot',
             'secureheaders',
+            'enhancedheaders',
         ],
     ];
 
