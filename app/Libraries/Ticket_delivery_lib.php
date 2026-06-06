@@ -107,6 +107,134 @@ class Ticket_delivery_lib
         return $results[$key] ?? ['status' => 'no_attempt_made'];
     }
 
+    /**
+     * Retry an existing delivery row IN PLACE — increments attempts,
+     * updates last_attempt_at, and re-sends via email/SMS without
+     * inserting a new ticket_delivery_attempts row. Returns
+     * ['status' => 'sent'|'failed'|'skipped', 'attempts' => N, ...]
+     *
+     * Called from spark `tickets:retry-deliveries`. The companion
+     * `tickets:cleanup` command flips status='failed' to 'bounced' once
+     * attempts >= max_retries OR the row has been stuck >= failed_ttl
+     * hours, so a healthy retry loop converges:
+     *     queued/failed → retry → sent (done)
+     *                  → failed → retry → sent
+     *                  → failed → ... → bounced (cleanup)
+     */
+    public function retryRow(int $deliveryId): array
+    {
+        $db  = db_connect();
+        $row = $db->table('ticket_delivery_attempts')
+            ->where('delivery_id', $deliveryId)
+            ->get()
+            ->getRowArray();
+        if ($row === null) {
+            return ['status' => 'not_found'];
+        }
+        if (in_array((string) $row['status'], ['sent', 'bounced'], true)) {
+            return ['status' => 'skipped', 'reason' => 'terminal'];
+        }
+
+        $ticket = $db->table('tickets')
+            ->select('tickets.*, ticket_products.title, ticket_products.brand_name')
+            ->join('ticket_products', 'ticket_products.ticket_product_id = tickets.ticket_product_id', 'left')
+            ->where('ticket_id', (int) $row['ticket_id'])
+            ->where('tickets.deleted', 0)
+            ->get()
+            ->getRow();
+        if ($ticket === null) {
+            // Ticket is gone — bounce this attempt so cleanup doesn't keep retrying.
+            $db->table('ticket_delivery_attempts')
+                ->where('delivery_id', $deliveryId)
+                ->update([
+                    'status'     => 'bounced',
+                    'last_error' => 'Ticket no longer exists.',
+                ]);
+
+            return ['status' => 'bounced', 'reason' => 'ticket_missing'];
+        }
+
+        // Increment attempts on the existing row BEFORE sending, so even
+        // a hard crash during send still bumps the counter and prevents
+        // an infinite hot-loop on a permanently failing channel.
+        $newAttempts = ((int) ($row['attempts'] ?? 0)) + 1;
+        $db->table('ticket_delivery_attempts')
+            ->where('delivery_id', $deliveryId)
+            ->update([
+                'attempts'        => $newAttempts,
+                'last_attempt_at' => date('Y-m-d H:i:s'),
+                'status'          => 'queued',
+            ]);
+
+        $channel = (string) $row['channel'];
+        $address = (string) $row['address'];
+        $product = $this->loadProduct($ticket);
+        if ($product === null) {
+            $db->table('ticket_delivery_attempts')
+                ->where('delivery_id', $deliveryId)
+                ->update(['status' => 'failed', 'last_error' => 'Product missing']);
+
+            return ['status' => 'failed', 'attempts' => $newAttempts, 'error' => 'product_missing'];
+        }
+
+        $url  = service('qr_lib')->build_redemption_url((string) $ticket->code);
+        $vars = $this->renderVars($product, $ticket, $url);
+
+        try {
+            if ($channel === 'email') {
+                $subjectTpl = $this->getConfig('ticket_delivery_email_subject', 'Your ticket: {{title}}');
+                $subject    = $this->renderTemplate($subjectTpl, $vars);
+                $html       = $this->buildEmailHtml($vars, $url);
+                $ok         = (new Email_lib())->sendEmail($address, $subject, $html);
+                $this->updateExistingAttempt($deliveryId, $ok ? 'sent' : 'failed', $ok ? null : 'Email send returned false');
+
+                return ['status' => $ok ? 'sent' : 'failed', 'attempts' => $newAttempts];
+            }
+            if ($channel === 'sms') {
+                $tpl        = $this->getConfig('ticket_delivery_sms_template', 'Your ticket {{code}} for {{title}} is ready. View: {{url}}');
+                $body       = $this->renderTemplate($tpl, $vars);
+                $cleanPhone = (int) preg_replace('/[^\d]/', '', $address);
+                if ($cleanPhone <= 0) {
+                    $this->updateExistingAttempt($deliveryId, 'failed', 'Invalid phone');
+
+                    return ['status' => 'failed', 'attempts' => $newAttempts, 'error' => 'invalid_phone'];
+                }
+                $ok = (new Sms_lib())->sendSMS($cleanPhone, $body);
+                $this->updateExistingAttempt($deliveryId, $ok ? 'sent' : 'failed', $ok ? null : 'SMS gateway returned false');
+
+                return ['status' => $ok ? 'sent' : 'failed', 'attempts' => $newAttempts];
+            }
+
+            // Wallet channels are handled out-of-band (passes are downloaded by
+            // the customer rather than push-delivered) — bounce so we stop
+            // retrying.
+            $this->updateExistingAttempt($deliveryId, 'bounced', 'Channel not retriable: ' . $channel);
+
+            return ['status' => 'bounced', 'attempts' => $newAttempts, 'reason' => 'unsupported_channel'];
+        } catch (Throwable $e) {
+            log_message('error', 'Ticket_delivery_lib::retryRow — ' . $e->getMessage());
+            $this->updateExistingAttempt($deliveryId, 'failed', $e->getMessage());
+
+            return ['status' => 'failed', 'attempts' => $newAttempts, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Updates status + last_error + sent_at (on success) on an existing
+     * ticket_delivery_attempts row WITHOUT touching attempts — that was
+     * already bumped by retryRow() above.
+     */
+    private function updateExistingAttempt(int $deliveryId, string $status, ?string $error): void
+    {
+        $patch = ['status' => $status, 'last_error' => $error];
+        if ($status === 'sent') {
+            $patch['sent_at'] = date('Y-m-d H:i:s');
+        }
+        db_connect()->table('ticket_delivery_attempts')
+            ->where('delivery_id', $deliveryId)
+            ->update($patch);
+    }
+
     // --- private ---
 
     private function loadProduct(object $ticket): ?object
