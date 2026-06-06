@@ -72,16 +72,30 @@ PESASWAP takes the proven OSPOS PHP backend (sales, customers, items, employees,
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/15-giftcards-list.png" alt="Gift card list with design strips" width="100%"><br><sub><b>Gift Cards list</b> — gradient design strips, "Transfer pending" + "Sends DATE" badges, Manage / Gift / Disable actions</sub></td>
+    <td align="center"><img src="docs/screenshots/15-giftcards-list.png" alt="Gift card list with design strips + linked badges" width="100%"><br><sub><b>Gift Cards list</b> — gradient design strips, "M-Pesa ••• 1111" / "Airtel ••• 3333" linked-phone badges, "Transfer pending" + "Sends DATE" pills, Manage / Link / Gift / Disable actions</sub></td>
     <td align="center"><img src="docs/screenshots/16-giftcards-create.png" alt="Issue gift card modal" width="100%"><br><sub><b>Issue Gift Card</b> — design picker (6 templates) + preset KES denomination chips + optional scheduled delivery</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/17-giftcards-detail.png" alt="Gift card detail with transfer banner" width="100%"><br><sub><b>Gift card detail</b> — QR + audit history + pending-transfer freeze banner (Redeem/Top-up/Refund/Adjust disabled while transfer pending)</sub></td>
-    <td align="center"><img src="docs/screenshots/24-public-giftcard-transfer.png" alt="Public accept-a-gift page" width="100%"><br><sub><b>/giftcard/transfer/:token</b> — public accept page (no auth). Accepts the gift → server rotates the code, sender's copy stops working.</sub></td>
+    <td align="center"><img src="docs/screenshots/17-giftcards-detail.png" alt="Gift card detail with linked-phone panel" width="100%"><br><sub><b>Gift card detail</b> — linked-phone panel + pending-transfer freeze + QR + audit history + 5-button actions row (Redeem / Top-up / Refund / Adjust / Send as gift)</sub></td>
+    <td align="center"><img src="docs/screenshots/27-giftcards-bind-modal.png" alt="Bind card to phone modal" width="100%"><br><sub><b>Bind to phone</b> — cashier picks the customer's MNO (M-Pesa / Airtel / MTN MoMo); STK push fires to the customer's handset for PIN authorisation</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/18-giftcards-designs.png" alt="Gift card designs admin" width="100%"><br><sub><b>Designs admin</b> — CRUD gradient templates (background, accent, text, lucide icon) seeded with Classic/Sunset/Forest/Birthday/Holiday/Wedding</sub></td>
+    <td align="center"><img src="docs/screenshots/24-public-giftcard-transfer.png" alt="Public accept-a-gift page" width="100%"><br><sub><b>/giftcard/transfer/:token</b> — public accept page (no auth). Accepts the gift → server rotates the code, sender's copy stops working.</sub></td>
+    <td align="center"><img src="docs/screenshots/18-giftcards-designs.png" alt="Gift card designs admin" width="100%"><br><sub><b>Designs admin</b> — CRUD gradient templates seeded with Classic/Sunset/Forest/Birthday/Holiday/Wedding</sub></td>
+  </tr>
+  <tr>
     <td align="center"><img src="docs/screenshots/19-giftcards-denominations.png" alt="Gift card denominations admin" width="100%"><br><sub><b>Denominations admin</b> — preset amounts per currency, snapshotted onto issued cards so later edits don't rewrite history</sub></td>
+    <td align="center"><img src="docs/screenshots/28-giftcards-tender-scan.png" alt="Tender demo — scan card" width="100%"><br><sub><b>Tender Demo — Scan card</b> — cashier scans an NFC card or searches by code, or skips for a bearer payment</sub></td>
+  </tr>
+</table>
+
+### Gift Cards — multi-tender flow (NFC binding + STK push + wallet + Co-op + BNPL)
+
+<table>
+  <tr>
+    <td align="center" width="55%"><img src="docs/screenshots/29-giftcards-tender-picker.png" alt="Tender Picker with multiple sources" width="100%"><br><sub><b>Tender Picker</b> — once a card is scanned, the picker lists card balance, the customer's bound MNO (default ★), other MNOs, PESASWAP Wallet, Co-op direct debit and Co-op BNPL — each gated by sufficiency and customer context. On selection: live <code>pending → awaiting_pin → completed</code> status pill with cancel.</sub></td>
+    <td align="center" width="22%"><img src="docs/screenshots/31-public-giftcard-self-service.png" alt="Customer self-service portal (linked)" width="100%"><br><sub><b>/giftcard/:code/self-service</b> (linked) — customer manages their card from any mobile browser: balance, recent activity, Unlink (OTP-gated), Disable (Danger Zone, OTP-gated)</sub></td>
+    <td align="center" width="22%"><img src="docs/screenshots/32-public-giftcard-self-service-link.png" alt="Customer self-service portal (unlinked)" width="100%"><br><sub><b>/giftcard/:code/self-service</b> (unlinked) — link-my-phone flow: enter number, pick provider, authorise via STK PIN</sub></td>
   </tr>
 </table>
 
