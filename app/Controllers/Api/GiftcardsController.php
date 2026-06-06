@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Api;
 
+use App\Libraries\MemorablePhrase;
 use CodeIgniter\HTTP\ResponseInterface;
 use Throwable;
 
@@ -1518,7 +1519,12 @@ class GiftcardsController extends BaseApiController
                 return $this->respondError('A transfer is already pending for this gift card.', 409);
             }
 
-            $token = bin2hex(random_bytes(16));  // 128-bit URL token
+            // Memorable 6-word phrase (~48 bits entropy from a curated
+            // 256-word list, e.g. "coral-music-river-jet-vivid-mango").
+            // Stored as sha256(phrase) so the wire/DB security model
+            // matches the prior 32-hex-char token. Friendlier to read
+            // aloud and easier for a customer to type if the SMS fails.
+            $token = MemorablePhrase::generate();
             $tokenHash = hash('sha256', $token);
             $ttlHours = max(1, self::TRANSFER_TOKEN_TTL_HOURS);
             $expires = date('Y-m-d H:i:s', time() + $ttlHours * 3600);
