@@ -86,6 +86,158 @@ class Apple_pkpass_lib
     }
 
     /**
+     * Build a .pkpass bundle representing a GIFT CARD (Apple's `storeCard`
+     * style). Same crypto pipeline as `build()` — same pass type id, same
+     * signing chain — only the pass.json schema differs.
+     *
+     * @param object $card          Hydrated giftcards row. Expects:
+     *                              giftcard_number, value, currency,
+     *                              recipient_name, sender_name, message,
+     *                              expires_at.
+     * @param string $redemptionUrl Full URL embedded in the QR (typically
+     *                              the public balance page /g/:code).
+     * @param string $brand         Merchant display name (e.g. PESASWAP).
+     *
+     * @return string Binary .pkpass content (a ZIP archive).
+     */
+    public function buildGiftCard(object $card, string $redemptionUrl, string $brand = 'PESASWAP'): string
+    {
+        [$certPem, $keyPem, $keyPassword, $wwdrPem, $passTypeId, $teamId] = $this->loadCredentials();
+
+        $passJson    = $this->buildGiftCardPassJson($card, $redemptionUrl, $passTypeId, $teamId, $brand);
+        $passJsonStr = json_encode($passJson, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($passJsonStr === false) {
+            throw new RuntimeException('Failed to encode gift-card pass.json');
+        }
+
+        $iconPng = $this->fallbackIcon();
+
+        $files = [
+            'pass.json'   => $passJsonStr,
+            'icon.png'    => $iconPng,
+            'icon@2x.png' => $iconPng,
+            'logo.png'    => $iconPng,
+        ];
+
+        $manifest = [];
+        foreach ($files as $name => $contents) {
+            $manifest[$name] = sha1($contents);
+        }
+        $manifestJson = json_encode($manifest, JSON_UNESCAPED_SLASHES);
+        if ($manifestJson === false) {
+            throw new RuntimeException('Failed to encode gift-card manifest.json');
+        }
+
+        $signature = $this->signManifest($manifestJson, $certPem, $keyPem, $keyPassword, $wwdrPem);
+
+        return $this->buildZip([
+            'pass.json'     => $passJsonStr,
+            'manifest.json' => $manifestJson,
+            'signature'     => $signature,
+            'icon.png'      => $iconPng,
+            'icon@2x.png'   => $iconPng,
+            'logo.png'      => $iconPng,
+        ]);
+    }
+
+    /**
+     * Gift-card pass.json. Uses Apple's `storeCard` style: a primary
+     * balance field on the front + secondary holder/sender + auxiliary
+     * code/expiry. Background defaults to the brand emerald gradient
+     * (rgb(16,185,129)) to match the in-app card.
+     */
+    private function buildGiftCardPassJson(object $card, string $redemptionUrl, string $passTypeId, string $teamId, string $brand): array
+    {
+        $currency = (string) ($card->currency ?? 'KES');
+        $balance  = (float) ($card->value ?? 0);
+        $code     = (string) ($card->giftcard_number ?? '');
+
+        $secondary = [];
+        if (! empty($card->recipient_name)) {
+            $secondary[] = [
+                'key'   => 'recipient',
+                'label' => 'FOR',
+                'value' => (string) $card->recipient_name,
+            ];
+        }
+        if (! empty($card->sender_name)) {
+            $secondary[] = [
+                'key'   => 'sender',
+                'label' => 'FROM',
+                'value' => (string) $card->sender_name,
+            ];
+        }
+
+        $auxiliary = [
+            [
+                'key'   => 'code',
+                'label' => 'CODE',
+                'value' => $code,
+            ],
+        ];
+        if (! empty($card->expires_at)) {
+            $auxiliary[] = [
+                'key'       => 'expires',
+                'label'     => 'EXPIRES',
+                'value'     => $this->w3cDate($card->expires_at),
+                'dateStyle' => 'PKDateStyleMedium',
+            ];
+        }
+
+        return [
+            'formatVersion'      => 1,
+            'passTypeIdentifier' => $passTypeId,
+            'teamIdentifier'     => $teamId,
+            'serialNumber'       => $code !== '' ? $code : (string) ($card->giftcard_id ?? ''),
+            'organizationName'   => $brand,
+            'description'        => 'Gift card',
+            'logoText'           => $brand,
+            'foregroundColor'    => 'rgb(255,255,255)',
+            'backgroundColor'    => 'rgb(16,185,129)',
+            'labelColor'         => 'rgb(255,255,255)',
+            'storeCard'          => [
+                'headerFields'    => [
+                    [
+                        'key'   => 'kind',
+                        'label' => 'GIFT CARD',
+                        'value' => $brand,
+                    ],
+                ],
+                'primaryFields'   => [
+                    [
+                        'key'          => 'balance',
+                        'label'        => 'BALANCE',
+                        'value'        => $balance,
+                        'currencyCode' => $currency,
+                    ],
+                ],
+                'secondaryFields' => $secondary,
+                'auxiliaryFields' => $auxiliary,
+                'backFields'      => array_values(array_filter([
+                    ! empty($card->message) ? [
+                        'key'   => 'message',
+                        'label' => 'MESSAGE',
+                        'value' => (string) $card->message,
+                    ] : null,
+                    [
+                        'key'   => 'redeem',
+                        'label' => 'CHECK BALANCE',
+                        'value' => $redemptionUrl,
+                    ],
+                ])),
+            ],
+            'barcodes' => [
+                [
+                    'format'          => 'PKBarcodeFormatQR',
+                    'message'         => $redemptionUrl,
+                    'messageEncoding' => 'iso-8859-1',
+                    'altText'         => $code,
+                ],
+            ],
+        ];
+    }
+
+    /**
      * @return array{0:string,1:string,2:string,3:string,4:string,5:string}
      */
     private function loadCredentials(): array

@@ -59,6 +59,7 @@ import {
 import { QRCode } from 'react-qr-code';
 import { api } from '../lib/api';
 import { formatCurrency } from '../lib/utils';
+import { giftcardDisplayName } from '../lib/giftcard-name';
 import { Modal } from '../components/ui/Modal';
 import { showToast } from '../components/ui/Toast';
 import { playNotificationSound } from '../lib/realtime';
@@ -1004,11 +1005,18 @@ function GiftCardCard({ card, binding, onClick, onDelete, onTransfer, onBind }: 
       </div>
 
       <div className="flex flex-1 flex-col p-5">
-        <div>
-          {card.recipient_name && (
-            <p className="truncate text-xs text-gray-500">→ {card.recipient_name}</p>
-          )}
-        </div>
+        {/* Human-readable display name — surfaces the gift relationship
+            in a single glance. Falls back to "Gift card · KES X · 6 Jun"
+            for cards with no recipient/sender data. */}
+        <p className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
+          {giftcardDisplayName({
+            sender: card.sender_name,
+            recipient: card.recipient_name,
+            value: card.initial_value,
+            currency: card.currency,
+            date: card.created_at,
+          })}
+        </p>
 
         <div className="mt-3">
           <p className="text-[10px] font-mono uppercase tracking-widest text-gray-500">Balance</p>

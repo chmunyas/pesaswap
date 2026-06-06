@@ -112,7 +112,7 @@ PESASWAP takes the proven OSPOS PHP backend (sales, customers, items, employees,
 
 Each PNG is a single-page walk-through with step-by-step instructions, embedded screenshots, the API routes involved, and the commit history.
 
-**June 2026 redesign** (Ive ⊕ WeChat principles): the cashier flow collapsed from 7 sections to **3 visible fields + a single "More options" disclosure**. NFC binding folded into issue (one button instead of two), the recipient now lands on a **/g/:code/welcome ceremony page** (1.5s gradient reveal + payment chime), the public balance page has **tap-to-show-cashier full-screen QR**, and transfer tokens are now **6-word memorable phrases** (`coral-music-river-jet-vivid-mango`) instead of 32-hex strings. See commits `e3ad06e2d` / `87e7a4f4c` / `e4b8fde42` / `481fd41c0`.
+**June 2026 redesign** (Ive ⊕ WeChat principles): the cashier flow collapsed from 7 sections to **3 visible fields + a single "More options" disclosure**. NFC binding folded into issue (one button instead of two), the recipient now lands on a **/g/:code/welcome ceremony page** (1.5s gradient reveal + payment chime), the public balance page has **tap-to-show-cashier full-screen QR** plus **Apple Wallet (.pkpass) + Google Wallet (giftCardObject) passes**, gift cards have **human-readable names** (`Bob → Alice · KES 1,000`), and transfer tokens are now **6-word memorable phrases** (`coral-music-river-jet-vivid-mango`) instead of 32-hex strings.
 
 <table>
   <tr>
@@ -128,8 +128,9 @@ Each PNG is a single-page walk-through with step-by-step instructions, embedded 
     <td align="center" width="25%"><a href="docs/use-cases/08-legacy-pos-guard.png"><img src="docs/use-cases/08-legacy-pos-guard.png" alt="Use case 8 — Legacy POS guard" width="100%"></a><br><sub><b>8. Legacy POS guard</b> — bound cards refuse raw-code redemption (defence-in-depth)</sub></td>
   </tr>
   <tr>
-    <td align="center" width="25%"><a href="docs/use-cases/09-recipient-ceremony.png"><img src="docs/use-cases/09-recipient-ceremony.png" alt="Use case 9 — Recipient ceremony" width="100%"></a><br><sub><b>9. Recipient ceremony</b> ✨ <em>new</em> — <code>/g/:code/welcome</code> envelope reveal + chime + "Keep it" CTA</sub></td>
-    <td colspan="3"></td>
+    <td align="center" width="25%"><a href="docs/use-cases/09-recipient-ceremony.png"><img src="docs/use-cases/09-recipient-ceremony.png" alt="Use case 9 — Recipient ceremony" width="100%"></a><br><sub><b>9. Recipient ceremony</b> ✨ — <code>/g/:code/welcome</code> envelope reveal + chime + "Keep it" CTA</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/10-wallet-passes.png"><img src="docs/use-cases/10-wallet-passes.png" alt="Use case 10 — Wallet passes" width="100%"></a><br><sub><b>10. Wallet passes</b> ✨ <em>new</em> — Apple <code>storeCard</code> + Google <code>giftCardObject</code>, reuses ticket cert pipeline</sub></td>
+    <td colspan="2"></td>
   </tr>
 </table>
 

@@ -185,6 +185,8 @@ $routes->group('api', static function ($routes) {
     $routes->post('tickets/scanner-devices/(:num)/revoke', 'Api\TicketsController::scannerDeviceRevoke/$1');
     $routes->get('tickets/dashboard', 'Api\TicketsController::ticketDashboard');
     $routes->post('tickets/bulk-issue', 'Api\TicketsController::ticketBulkIssue');
+    // Admin audit log (ent-admin-audit-log)
+    $routes->get('admin/audit-log', 'Api\TicketsController::auditLogIndex');
 
     // Tickets — Phase 5: promos + bundles + seat holds + reports
     $routes->get('ticket-promos', 'Api\TicketsController::promoIndex');
@@ -211,6 +213,9 @@ $routes->group('api', static function ($routes) {
     $routes->post('public/giftcards/(:segment)/binding/otp', 'Api\PublicController::giftcardPublicOtp/$1');
     $routes->delete('public/giftcards/(:segment)/binding', 'Api\PublicController::giftcardPublicUnbind/$1');
     $routes->post('public/giftcards/(:segment)/disable', 'Api\PublicController::giftcardPublicDisable/$1');
+    // Wallet passes (Phase E redesign — gift cards live alongside tickets)
+    $routes->get('public/giftcards/(:segment)/wallet/google', 'Api\PublicController::giftcardGoogleWallet/$1');
+    $routes->get('public/giftcards/(:segment)/wallet/apple', 'Api\PublicController::giftcardAppleWallet/$1');
     $routes->get('public/tickets/(:segment)', 'Api\PublicController::ticketLookup/$1');
     $routes->post('public/tickets/(:segment)/transfer/request', 'Api\PublicController::ticketTransferRequest/$1');
     $routes->post('public/tickets/(:segment)/transfer/confirm', 'Api\PublicController::ticketTransferConfirm/$1');

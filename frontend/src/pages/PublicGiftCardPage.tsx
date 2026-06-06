@@ -226,6 +226,44 @@ export function PublicGiftCardPage() {
               )}
             </div>
 
+            {/* Add-to-Wallet buttons — surface platform-native passes when
+                the merchant has configured Apple/Google wallet credentials.
+                Apple endpoint serves the .pkpass binary directly (iOS
+                Safari opens the Add sheet); Google endpoint returns JSON
+                with a save_url that we follow. Errors surface inline
+                rather than as toasts — wallet config is a merchant choice
+                the customer can do nothing about. */}
+            <div className="flex flex-wrap gap-2">
+              <a
+                href={`/api/public/giftcards/${encodeURIComponent(code ?? '')}/wallet/apple`}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-2xl bg-black px-3 py-2.5 text-xs font-semibold text-white hover:bg-gray-800"
+                title="Add this gift card to your Apple Wallet (.pkpass)"
+              >
+                🍎 Add to Apple Wallet
+              </a>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const r = await fetch(`/api/public/giftcards/${encodeURIComponent(code ?? '')}/wallet/google`);
+                    const j = await r.json();
+                    if (j?.success && j?.data?.save_url) {
+                      window.location.href = j.data.save_url;
+                    } else {
+                      alert(j?.message ?? 'Google Wallet is not configured on this merchant.');
+                    }
+                  } catch (err) {
+                    alert(err instanceof Error ? err.message : 'Failed to open Google Wallet.');
+                  }
+                }}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-2xl bg-white px-3 py-2.5 text-xs font-semibold text-gray-800 border border-gray-300 hover:bg-gray-50"
+                title="Add this gift card to your Google Wallet"
+              >
+                <span style={{ background: 'linear-gradient(45deg, #4285f4, #34a853, #fbbc05, #ea4335)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontWeight: 'bold' }}>G</span>
+                Add to Google Wallet
+              </button>
+            </div>
+
             <div className="flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-[11px] text-emerald-800 dark:border-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-300">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>This is a bearer instrument — anyone with the code can redeem it. Keep it safe.</span>

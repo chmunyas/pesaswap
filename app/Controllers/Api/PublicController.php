@@ -168,6 +168,20 @@ class PublicController extends BaseApiController
         return $this->delegateToGiftcards('publicUnbind', $code);
     }
 
+    /**
+     * GET /api/public/giftcards/:code/wallet/google — Save-to-Google-Wallet URL.
+     * GET /api/public/giftcards/:code/wallet/apple  — Apple .pkpass download.
+     */
+    public function giftcardGoogleWallet(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicGoogleWallet', $code);
+    }
+
+    public function giftcardAppleWallet(string $code): ResponseInterface
+    {
+        return $this->delegateToGiftcards('publicAppleWallet', $code);
+    }
+
     private function delegateToGiftcards(string $method, string $arg): ResponseInterface
     {
         $gc = new GiftcardsController();

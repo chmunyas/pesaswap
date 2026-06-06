@@ -797,6 +797,140 @@ class GiftcardsController extends BaseApiController
         ]);
     }
 
+    /**
+     * Public endpoint: Google Wallet save URL for a gift card.
+     *
+     * Mounted at GET /api/public/giftcards/:code/wallet/google. Rate-
+     * limited per-IP (30/min — same as the ticket equivalent). Returns
+     * { save_url } on success or a 503 if wallet credentials are not
+     * configured (so the operator can show a "wallet not enabled" hint
+     * instead of a stack trace).
+     */
+    public function publicGoogleWallet(string $code): ResponseInterface
+    {
+        if (!$this->publicRateLimit('gc_gwallet', 30, 60)) {
+            return $this->respondError('Too many requests.', 429);
+        }
+        $normalized = strtoupper(trim($code));
+        if (!preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid gift card code.', 422);
+        }
+        $row = $this->loadPublicCardRow($normalized);
+        if ($row === null) {
+            return $this->respondError('Gift card not found.', 404);
+        }
+        try {
+            $card = (object) $row;
+            $url  = rtrim(base_url('g/' . $normalized), '/');
+            $brand = $this->merchantBrandName();
+            $saveUrl = service('google_wallet_lib')->buildGiftCardSaveUrl($card, $url, $brand);
+            return $this->respondSuccess(['save_url' => $saveUrl], 'Google Wallet save URL generated.');
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::publicGoogleWallet — ' . $e->getMessage());
+            return $this->respondError($e->getMessage(), 503);
+        }
+    }
+
+    /**
+     * Public endpoint: Apple Wallet .pkpass download for a gift card.
+     *
+     * Mounted at GET /api/public/giftcards/:code/wallet/apple. Returns
+     * a binary .pkpass (ZIP) with Content-Type application/vnd.apple.pkpass
+     * which causes iOS Safari to open the wallet "Add" sheet directly.
+     */
+    public function publicAppleWallet(string $code): ResponseInterface
+    {
+        if (!$this->publicRateLimit('gc_apple', 30, 60)) {
+            return $this->respondError('Too many requests.', 429);
+        }
+        $normalized = strtoupper(trim($code));
+        if (!preg_match('/^[A-Z0-9\\-]{4,64}$/', $normalized)) {
+            return $this->respondError('Invalid gift card code.', 422);
+        }
+        $row = $this->loadPublicCardRow($normalized);
+        if ($row === null) {
+            return $this->respondError('Gift card not found.', 404);
+        }
+        try {
+            $card = (object) $row;
+            $url  = rtrim(base_url('g/' . $normalized), '/');
+            $brand = $this->merchantBrandName();
+            $pkpass = service('apple_pkpass_lib')->buildGiftCard($card, $url, $brand);
+            return $this->response
+                ->setHeader('Content-Type', 'application/vnd.apple.pkpass')
+                ->setHeader('Content-Disposition', 'attachment; filename="' . $normalized . '.pkpass"')
+                ->setBody($pkpass);
+        } catch (Throwable $e) {
+            log_message('error', 'GiftcardsController::publicAppleWallet — ' . $e->getMessage());
+            return $this->respondError($e->getMessage(), 503);
+        }
+    }
+
+    /**
+     * Shared loader for public wallet endpoints — returns the raw row or
+     * null. Refuses disabled / used cards (no point issuing a wallet pass
+     * for something the customer can't spend).
+     */
+    private function loadPublicCardRow(string $normalized): ?array
+    {
+        if (!$this->db->tableExists('giftcards')) {
+            return null;
+        }
+        $row = $this->db->table('giftcards')
+            ->where('giftcard_number', $normalized)
+            ->where('deleted', 0)
+            ->get()
+            ->getRowArray();
+        if ($row === null) {
+            return null;
+        }
+        $status = $this->computeStatus($row);
+        $isValid = $status === self::STATUS_ACTIVE && $this->bccompZero((string) $row['value']) > 0;
+        if (!$isValid) {
+            return null;
+        }
+        return $row;
+    }
+
+    /**
+     * Sliding-window IP rate limiter used by the wallet endpoints.
+     * Mirrors TicketsController::publicRateLimit but lives here so the
+     * gift-card public surface isn't coupled to tickets.
+     */
+    private function publicRateLimit(string $bucket, int $max, int $windowSeconds): bool
+    {
+        try {
+            $ip   = $this->request->getIPAddress() ?: 'unknown';
+            $cache = service('cache');
+            $key  = $bucket . '_' . hash('sha256', $ip);
+            $hits = (int) ($cache->get($key) ?? 0);
+            if ($hits >= $max) {
+                return false;
+            }
+            $cache->save($key, $hits + 1, $windowSeconds);
+            return true;
+        } catch (Throwable) {
+            // If cache breaks, fail open — better to over-serve than to
+            // completely lock out wallet downloads when caching has a hiccup.
+            return true;
+        }
+    }
+
+    /**
+     * Look up the merchant's brand name from app_config. Falls back to
+     * 'PESASWAP' so wallet passes always have a sane logo text.
+     */
+    private function merchantBrandName(): string
+    {
+        try {
+            $row = $this->db->table('app_config')->where('key', 'company')->get()->getRowArray();
+            $name = $row !== null ? trim((string) $row['value']) : '';
+            return $name !== '' ? $name : 'PESASWAP';
+        } catch (Throwable) {
+            return 'PESASWAP';
+        }
+    }
+
     // ---------- helpers ----------
 
     /**

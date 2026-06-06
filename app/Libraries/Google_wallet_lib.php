@@ -105,6 +105,119 @@ class Google_wallet_lib
         return 'https://pay.google.com/gp/v/save/' . $jwt;
     }
 
+    /**
+     * Build a Save-to-Google-Wallet URL for a GIFT CARD.
+     *
+     * Uses Google Wallet's GiftCardObject / GiftCardClass passes
+     * instead of the EventTicket flow. Same JWT signing path + same
+     * credentials, so configuration is shared with the ticket pipeline.
+     *
+     * @param object $card          Hydrated giftcards row. Expects:
+     *                              giftcard_id, giftcard_number, value,
+     *                              currency, recipient_name, sender_name,
+     *                              message, expires_at.
+     * @param string $redemptionUrl Full URL embedded in the QR (typically
+     *                              the public balance page /g/:code).
+     * @param string $brand         Merchant display name (e.g. PESASWAP).
+     *
+     * @return string Save-to-wallet URL.
+     */
+    public function buildGiftCardSaveUrl(object $card, string $redemptionUrl, string $brand = 'PESASWAP'): string
+    {
+        [$privateKey, $clientEmail, $issuerId] = $this->loadCredentials();
+
+        // One class per merchant brand is enough — gift cards don't have
+        // "products" the way tickets do. We bucket all gift cards under a
+        // single class so the merchant only has to approve it once.
+        $classId  = $issuerId . '.giftcard_class_default';
+        $objectId = $issuerId . '.giftcard_' . (int) ($card->giftcard_id ?? 0);
+
+        $giftCardClass = [
+            'id'                 => $classId,
+            'issuerName'         => $brand,
+            'reviewStatus'       => 'UNDER_REVIEW',
+            'hexBackgroundColor' => '#10b981',
+            'cardTitle'          => [
+                'defaultValue' => ['language' => 'en-US', 'value' => 'Gift Card'],
+            ],
+        ];
+
+        $balance     = (float) ($card->value ?? 0);
+        $currency    = (string) ($card->currency ?? 'KES');
+        $code        = (string) ($card->giftcard_number ?? '');
+        $recipient   = trim((string) ($card->recipient_name ?? ''));
+        $sender      = trim((string) ($card->sender_name ?? ''));
+        $displayName = $recipient !== '' && $sender !== ''
+            ? "{$sender} → {$recipient}"
+            : ($recipient !== '' ? "Gift for {$recipient}" : ($sender !== '' ? "Gift from {$sender}" : 'Gift card'));
+
+        $giftCardObject = [
+            'id'           => $objectId,
+            'classId'      => $classId,
+            'state'        => 'ACTIVE',
+            'cardNumber'   => $code,
+            'eventNumber'  => $code,
+            // Google Wallet expects micros (1/1,000,000 of a unit).
+            // For a KES 1,000 card this is 1_000_000_000 (1 KES = 10^6 micros).
+            'balance'      => [
+                'micros'       => (int) round($balance * 1_000_000),
+                'currencyCode' => $currency,
+            ],
+            'balanceUpdateTime' => [
+                'date' => gmdate('c'),
+            ],
+            'header' => [
+                'defaultValue' => ['language' => 'en-US', 'value' => $displayName],
+            ],
+            'barcode' => [
+                'type'          => 'QR_CODE',
+                'value'         => $redemptionUrl,
+                'alternateText' => $code,
+            ],
+            'textModulesData' => array_values(array_filter([
+                ! empty($card->message) ? [
+                    'id'     => 'message',
+                    'header' => 'Message',
+                    'body'   => (string) $card->message,
+                ] : null,
+                [
+                    'id'     => 'redeem',
+                    'header' => 'Redeem',
+                    'body'   => "Show this card at any {$brand} merchant or check your balance at the link below.",
+                ],
+            ])),
+            'linksModuleData' => [
+                'uris' => [
+                    [
+                        'uri'         => $redemptionUrl,
+                        'description' => 'Check balance',
+                    ],
+                ],
+            ],
+        ];
+
+        if (! empty($card->expires_at)) {
+            $giftCardObject['validTimeInterval'] = [
+                'end' => ['date' => $this->isoDate($card->expires_at)],
+            ];
+        }
+
+        $payload = [
+            'iss'     => $clientEmail,
+            'aud'     => 'google',
+            'typ'     => 'savetowallet',
+            'iat'     => time(),
+            'payload' => [
+                'giftCardClasses' => [$giftCardClass],
+                'giftCardObjects' => [$giftCardObject],
+            ],
+        ];
+
+        $jwt = JWT::encode($payload, $privateKey, 'RS256');
+
+        return 'https://pay.google.com/gp/v/save/' . $jwt;
+    }
+
     private function loadCredentials(): array
     {
         $db        = db_connect();
