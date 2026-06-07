@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Api;
 
+use App\Libraries\BulkImportLib;
 use App\Libraries\MemorablePhrase;
 use CodeIgniter\HTTP\ResponseInterface;
 use Throwable;
@@ -3590,6 +3591,113 @@ class GiftcardsController extends BaseApiController
             && $this->db->tableExists('giftcard_drops')
             && $this->db->tableExists('giftcard_drop_claims');
     }
+
+    /**
+     * POST /api/giftcards/bulk-issue — two modes:
+     *
+     * Mode A — uniform batch: { mode:"uniform", count, value, currency,
+     *   design_id?, expires_in_days?, prefix?, sender_name?, message? }
+     *
+     * Mode B — per-row payload: { mode:"rows", rows:[{...}, ...] }
+     *   Each row: { value, currency?, recipient_name?, recipient_email?,
+     *               recipient_phone?, sender_name?, message?, design_id?,
+     *               expires_in_days?, denomination_id? }
+     *
+     * Returns the standard BulkImportLib envelope + giftcard_numbers[]
+     * of every minted card.
+     */
+    public function bulkIssue(): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) return $authResponse;
+        $body = $this->request->getJSON(true) ?? [];
+        $mode = strtolower(trim((string)($body['mode'] ?? 'rows')));
+        $employeeId = (int)($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+
+        // Mode A → synthesize rows[] from the uniform spec so we can
+        // reuse the same per-row handler + BulkImportLib for everything.
+        if ($mode === 'uniform') {
+            $count = (int)($body['count'] ?? 0);
+            if ($count <= 0 || $count > self::DEFAULT_BULK_MAX) {
+                return $this->respondError("count must be 1..".self::DEFAULT_BULK_MAX, 422);
+            }
+            if (!isset($body['value']) || (float)$body['value'] <= 0) {
+                return $this->respondError('value must be > 0.', 422);
+            }
+            $template = [
+                'value'           => (float)$body['value'],
+                'currency'        => (string)($body['currency'] ?? 'KES'),
+                'design_id'       => isset($body['design_id']) ? (int)$body['design_id'] : null,
+                'expires_in_days' => isset($body['expires_in_days']) ? (int)$body['expires_in_days'] : null,
+                'sender_name'     => (string)($body['sender_name'] ?? ''),
+                'message'         => (string)($body['message'] ?? ''),
+            ];
+            $rows = array_fill(0, $count, $template);
+            $body['rows'] = $rows;
+        }
+
+        $handler = function (array $row, int $idx, $db) {
+            $dryRun = !empty($row['__dry_run']);
+            if (!isset($row['value']) || (float)$row['value'] <= 0) {
+                return ['status' => 'failed', 'key' => '', 'message' => 'value must be > 0'];
+            }
+            $value = (float)$row['value'];
+            $currency = mb_substr((string)($row['currency'] ?? 'KES'), 0, 8);
+            $expiresIn = isset($row['expires_in_days']) ? (int)$row['expires_in_days'] : null;
+            $expiresAt = $expiresIn !== null && $expiresIn > 0
+                ? date('Y-m-d H:i:s', time() + $expiresIn * 86400)
+                : null;
+            $recipientName = mb_substr((string)($row['recipient_name'] ?? ''), 0, 255);
+            $recipientEmail = trim((string)($row['recipient_email'] ?? ''));
+            $senderName = mb_substr((string)($row['sender_name'] ?? ''), 0, 255);
+            $message = mb_substr((string)($row['message'] ?? ''), 0, 1024);
+
+            if ($recipientEmail !== '' && !filter_var($recipientEmail, FILTER_VALIDATE_EMAIL)) {
+                return ['status' => 'failed', 'key' => '', 'message' => 'invalid recipient_email'];
+            }
+
+            if ($dryRun) {
+                return ['status' => 'imported', 'key' => 'GC-DRYRUN-' . ($idx + 1), 'reason' => 'would mint'];
+            }
+
+            $code = $this->generateUniqueCode();
+            if ($code === null) {
+                return ['status' => 'failed', 'key' => '', 'message' => 'unique code generation failed'];
+            }
+            $insert = [
+                'giftcard_number' => $code,
+                'value'           => number_format($value, 2, '.', ''),
+                'initial_value'   => number_format($value, 2, '.', ''),
+                'status'          => self::STATUS_ACTIVE,
+                'currency'        => $currency,
+                'expires_at'      => $expiresAt,
+                'recipient_name'  => $recipientName !== '' ? $recipientName : null,
+                'recipient_email' => $recipientEmail !== '' ? $recipientEmail : null,
+                'sender_name'     => $senderName !== '' ? $senderName : null,
+                'message'         => $message !== '' ? $message : null,
+                'deleted'         => 0,
+            ];
+            if ($this->modernizationApplied()) {
+                $insert['design_id'] = isset($row['design_id']) ? (int)$row['design_id'] : null;
+                $insert['delivery_status'] = self::DELIVERY_IMMEDIATE;
+            }
+            $db->table('giftcards')->insert($insert);
+            return ['status' => 'imported', 'key' => $code, 'reason' => 'minted'];
+        };
+
+        $result = BulkImportLib::run(
+            $this->db, 'giftcards', $body, $employeeId,
+            (string)($this->request->getIPAddress() ?: ''),
+            (string)$this->request->getUserAgent(),
+            $handler,
+            self::DEFAULT_BULK_MAX,
+        );
+        if (isset($result['error'])) {
+            return $this->respondError((string)$result['error'], (int)($result['http'] ?? 422));
+        }
+        return $this->respondSuccess($result, 'Bulk issue complete.');
+    }
+
+    private const DEFAULT_BULK_MAX = 1000;
 
     // ---------- Helpers ----------
 

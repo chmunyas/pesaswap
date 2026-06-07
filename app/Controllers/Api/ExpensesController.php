@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Api;
 
+use App\Libraries\BulkImportLib;
 use CodeIgniter\HTTP\ResponseInterface;
 use Throwable;
 
@@ -270,5 +271,87 @@ class ExpensesController extends BaseApiController
         } catch (Throwable $e) {
             return $this->respondError('Error deleting expense: ' . $e->getMessage(), 500);
         }
+    }
+
+    /**
+     * POST /api/expenses/bulk — historical accounting migration. No
+     * dedupe (expenses are append-only; the import audit row is the
+     * deduplication mechanism via payload_hash).
+     *
+     * Each row: { amount, payment_type, description, expense_category_id,
+     *             date?, supplier_id?, supplier_tax_code?, tax_amount? }
+     */
+    public function bulkImport(): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) return $authResponse;
+        if (!$this->db->tableExists('expenses')) return $this->respondError('Expenses table missing.', 503);
+
+        $body = $this->request->getJSON(true) ?? [];
+        $employee = $this->employee->get_logged_in_employee_info();
+        $employeeId = (int)($employee->person_id ?? 0);
+
+        $hasSupplier = $this->hasField('expenses', 'supplier_id');
+        $hasTaxCode = $this->hasField('expenses', 'supplier_tax_code');
+        $hasTaxAmt = $this->hasField('expenses', 'tax_amount');
+
+        $handler = function (array $row, int $idx, $db) use ($employeeId, $hasSupplier, $hasTaxCode, $hasTaxAmt) {
+            $dryRun = !empty($row['__dry_run']);
+            $amount = isset($row['amount']) ? (float)$row['amount'] : 0;
+            $paymentType = trim((string)($row['payment_type'] ?? ''));
+            $description = trim((string)($row['description'] ?? ''));
+            $catId = (int)($row['expense_category_id'] ?? 0);
+            $dateInput = trim((string)($row['date'] ?? ''));
+            if ($amount <= 0) {
+                return ['status' => 'failed', 'key' => '', 'message' => 'amount must be > 0'];
+            }
+            if ($paymentType === '') {
+                return ['status' => 'failed', 'key' => '', 'message' => 'payment_type required'];
+            }
+            if ($description === '') {
+                return ['status' => 'failed', 'key' => '', 'message' => 'description required'];
+            }
+            if ($catId <= 0) {
+                return ['status' => 'failed', 'key' => '', 'message' => 'expense_category_id required (positive int)'];
+            }
+            if ($dateInput !== '' && strtotime($dateInput) === false) {
+                return ['status' => 'failed', 'key' => '', 'message' => "invalid date '{$dateInput}'"];
+            }
+            // Validate category exists.
+            $catExists = $db->table('expense_categories')
+                ->where('expense_category_id', $catId)->where('deleted', 0)
+                ->countAllResults();
+            if ($catExists === 0) {
+                return ['status' => 'failed', 'key' => '', 'message' => "expense_category_id {$catId} not found"];
+            }
+            $key = "{$description} · {$amount}";
+            if ($dryRun) {
+                return ['status' => 'imported', 'key' => $key, 'reason' => 'would insert'];
+            }
+            $data = [
+                'date'                => $dateInput === '' ? date('Y-m-d H:i:s') : date('Y-m-d H:i:s', strtotime($dateInput)),
+                'amount'              => $amount,
+                'payment_type'        => mb_substr($paymentType, 0, 20),
+                'description'         => mb_substr($description, 0, 4096),
+                'employee_id'         => $employeeId,
+                'deleted'             => 0,
+                'expense_category_id' => $catId,
+            ];
+            if ($hasSupplier && !empty($row['supplier_id'])) $data['supplier_id'] = (int)$row['supplier_id'];
+            if ($hasTaxCode && isset($row['supplier_tax_code'])) $data['supplier_tax_code'] = mb_substr((string)$row['supplier_tax_code'], 0, 50);
+            if ($hasTaxAmt && isset($row['tax_amount'])) $data['tax_amount'] = (float)$row['tax_amount'];
+            $db->table('expenses')->insert($data);
+            return ['status' => 'imported', 'key' => $key, 'reason' => 'inserted'];
+        };
+
+        $result = BulkImportLib::run(
+            $this->db, 'expenses', $body, $employeeId,
+            (string)($this->request->getIPAddress() ?: ''),
+            (string)$this->request->getUserAgent(),
+            $handler,
+        );
+        if (isset($result['error'])) {
+            return $this->respondError((string)$result['error'], (int)($result['http'] ?? 422));
+        }
+        return $this->respondSuccess($result, 'Bulk import complete.');
     }
 }

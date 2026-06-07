@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Api;
 
+use App\Libraries\BulkImportLib;
 use App\Models\Item;
 use CodeIgniter\HTTP\ResponseInterface;
 
@@ -240,5 +241,110 @@ class ItemsController extends BaseApiController
         }
 
         return isset($existing[$key]) ? (int)$existing[$key] : $default;
+    }
+
+    /**
+     * POST /api/items/bulk — batched upsert by item_number.
+     *
+     * Body:
+     *   { dry_run?, skip_on_error?, rows: [
+     *       { item_number, name, unit_price, cost_price,
+     *         tax_percent?, quantity?, description?, supplier_id?, category? }
+     *   ] }
+     *
+     * Idempotency: existing item_number → UPDATE; new item_number → INSERT.
+     * Missing required fields fail the row with a clear message.
+     */
+    public function bulkImport(): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) return $authResponse;
+
+        $body = $this->request->getJSON(true) ?? [];
+        $employeeId = (int)($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+
+        $itemModel = $this->item;
+
+        $handler = function (array $row, int $idx, $db) use ($itemModel) {
+            $dryRun = !empty($row['__dry_run']);
+            $itemNumber = trim((string)($row['item_number'] ?? $row['barcode'] ?? ''));
+            $name = trim((string)($row['name'] ?? ''));
+            if ($name === '') {
+                return ['status' => 'failed', 'key' => $itemNumber, 'message' => 'name is required'];
+            }
+            if (!isset($row['unit_price']) || !is_numeric($row['unit_price'])) {
+                return ['status' => 'failed', 'key' => $itemNumber, 'message' => 'unit_price must be numeric'];
+            }
+            if (!isset($row['cost_price']) || !is_numeric($row['cost_price'])) {
+                return ['status' => 'failed', 'key' => $itemNumber, 'message' => 'cost_price must be numeric'];
+            }
+
+            $existingId = null;
+            if ($itemNumber !== '') {
+                $existing = $db->table('items')
+                    ->where('item_number', $itemNumber)
+                    ->where('deleted', 0)
+                    ->get()->getRowArray();
+                if ($existing !== null) $existingId = (int)$existing['item_id'];
+            }
+
+            $data = [
+                'name'         => mb_substr($name, 0, 255),
+                'item_number'  => $itemNumber !== '' ? mb_substr($itemNumber, 0, 50) : null,
+                'description'  => mb_substr((string)($row['description'] ?? ''), 0, 4096),
+                'category'     => mb_substr((string)($row['category'] ?? ''), 0, 255),
+                'unit_price'   => number_format((float)$row['unit_price'], 2, '.', ''),
+                'cost_price'   => number_format((float)$row['cost_price'], 2, '.', ''),
+                'tax_percent'  => isset($row['tax_percent']) ? (float)$row['tax_percent'] : 0,
+                'supplier_id'  => isset($row['supplier_id']) ? (int)$row['supplier_id'] : null,
+                'deleted'      => 0,
+            ];
+
+            if ($dryRun) {
+                return ['status' => $existingId !== null ? 'imported' : 'imported', 'key' => $itemNumber ?: $name, 'reason' => $existingId !== null ? 'would update' : 'would insert'];
+            }
+
+            $action = $existingId !== null ? 'update' : 'insert';
+            if ($action === 'update') {
+                $data['item_id'] = $existingId;
+                $db->table('items')->where('item_id', $existingId)->update($data);
+                $savedId = $existingId;
+            } else {
+                $db->table('items')->insert($data);
+                $savedId = (int)$db->insertID();
+            }
+
+            // Optional stock seed at default location 1.
+            if (isset($row['quantity']) && is_numeric($row['quantity']) && $db->tableExists('item_quantities')) {
+                $qty = (float)$row['quantity'];
+                $loc = (int)($row['location_id'] ?? 1);
+                $existingQ = $db->table('item_quantities')
+                    ->where('item_id', $savedId)->where('location_id', $loc)
+                    ->get()->getRowArray();
+                if ($existingQ === null) {
+                    $db->table('item_quantities')->insert([
+                        'item_id' => $savedId, 'location_id' => $loc,
+                        'quantity' => number_format($qty, 3, '.', ''),
+                    ]);
+                } else {
+                    $db->table('item_quantities')
+                        ->where('item_id', $savedId)->where('location_id', $loc)
+                        ->update(['quantity' => number_format($qty, 3, '.', '')]);
+                }
+            }
+
+            return ['status' => 'imported', 'key' => $itemNumber ?: (string)$savedId, 'reason' => $action];
+        };
+
+        $result = BulkImportLib::run(
+            $this->db, 'items', $body, $employeeId,
+            (string)($this->request->getIPAddress() ?: ''),
+            (string)$this->request->getUserAgent(),
+            $handler,
+        );
+
+        if (isset($result['error'])) {
+            return $this->respondError((string)$result['error'], (int)($result['http'] ?? 422));
+        }
+        return $this->respondSuccess($result, 'Bulk import complete.');
     }
 }

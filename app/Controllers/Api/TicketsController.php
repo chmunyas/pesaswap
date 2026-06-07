@@ -3276,6 +3276,118 @@ class TicketsController extends BaseApiController
         ], 'Bulk issuance complete.');
     }
 
+    /**
+     * POST /api/ticket-products/bulk — batched ticket-product creation.
+     * Delegates each row to productCreate() inside a transaction so all
+     * existing validation + signing-key logic stays in one place.
+     */
+    public function productBulkCreate(): ResponseInterface
+    {
+        if ($auth = $this->requireTicketsAccess()) return $auth;
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+        $body = $this->request->getJSON(true) ?? [];
+        $employeeId = (int)($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+
+        $self = $this;
+        $handler = function (array $row, int $idx, $db) use ($self) {
+            $dryRun = !empty($row['__dry_run']);
+            $title = trim((string)($row['title'] ?? ''));
+            if ($title === '') {
+                return ['status' => 'failed', 'key' => '', 'message' => 'title is required'];
+            }
+            // Idempotency on (title, brand_name) — case-sensitive (titles
+            // are usually distinct enough that case-folding would surprise).
+            $brand = trim((string)($row['brand_name'] ?? ''));
+            $dup = $db->table('ticket_products')
+                ->where('title', $title)
+                ->where('brand_name', $brand)
+                ->countAllResults();
+            if ($dup > 0) {
+                return ['status' => 'skipped', 'key' => $title, 'reason' => 'product with this title already exists'];
+            }
+            if ($dryRun) {
+                return ['status' => 'imported', 'key' => $title, 'reason' => 'would insert'];
+            }
+            $fakeRequest = $self->request;
+            $original = $fakeRequest->getBody();
+            $fakeRequest->setBody(json_encode($row));
+            $response = $self->productCreate();
+            $fakeRequest->setBody($original);
+            $code = $response->getStatusCode();
+            $json = json_decode((string)$response->getBody(), true);
+            if ($code >= 200 && $code < 300) {
+                return ['status' => 'imported', 'key' => $title, 'reason' => 'inserted', 'message' => 'product_id=' . ($json['data']['product']['ticket_product_id'] ?? '?')];
+            }
+            return ['status' => 'failed', 'key' => $title, 'message' => (string)($json['message'] ?? "HTTP {$code}")];
+        };
+
+        $result = \App\Libraries\BulkImportLib::run(
+            $this->db, 'ticket_products', $body, $employeeId,
+            (string)($this->request->getIPAddress() ?: ''),
+            (string)$this->request->getUserAgent(),
+            $handler,
+        );
+        if (isset($result['error'])) {
+            return $this->respondError((string)$result['error'], (int)($result['http'] ?? 422));
+        }
+        return $this->respondSuccess($result, 'Bulk product import complete.');
+    }
+
+    /**
+     * POST /api/ticket-promos/bulk — batched promo-code creation.
+     * Delegates to promoCreate() per row for validation consistency.
+     */
+    public function promoBulkCreate(): ResponseInterface
+    {
+        if ($auth = $this->requireTicketsAccess()) return $auth;
+        if (! $this->migrationApplied()) {
+            return $this->respondError('Tickets migration is required.', 503);
+        }
+        $body = $this->request->getJSON(true) ?? [];
+        $employeeId = (int)($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+
+        $self = $this;
+        $handler = function (array $row, int $idx, $db) use ($self) {
+            $dryRun = !empty($row['__dry_run']);
+            $code = strtoupper(trim((string)($row['code'] ?? '')));
+            if ($code === '') {
+                return ['status' => 'failed', 'key' => '', 'message' => 'code is required'];
+            }
+            $row['code'] = $code;
+            $dup = $db->table('ticket_promo_codes')->where('code', $code)->countAllResults();
+            if ($dup > 0) {
+                return ['status' => 'skipped', 'key' => $code, 'reason' => 'code already exists'];
+            }
+            if ($dryRun) {
+                return ['status' => 'imported', 'key' => $code, 'reason' => 'would insert'];
+            }
+            $fakeRequest = $self->request;
+            $original = $fakeRequest->getBody();
+            $fakeRequest->setBody(json_encode($row));
+            $response = $self->promoCreate();
+            $fakeRequest->setBody($original);
+            $rc = $response->getStatusCode();
+            $json = json_decode((string)$response->getBody(), true);
+            if ($rc >= 200 && $rc < 300) {
+                return ['status' => 'imported', 'key' => $code, 'reason' => 'inserted'];
+            }
+            return ['status' => 'failed', 'key' => $code, 'message' => (string)($json['message'] ?? "HTTP {$rc}")];
+        };
+
+        $result = \App\Libraries\BulkImportLib::run(
+            $this->db, 'ticket_promos', $body, $employeeId,
+            (string)($this->request->getIPAddress() ?: ''),
+            (string)$this->request->getUserAgent(),
+            $handler,
+        );
+        if (isset($result['error'])) {
+            return $this->respondError((string)$result['error'], (int)($result['http'] ?? 422));
+        }
+        return $this->respondSuccess($result, 'Bulk promo import complete.');
+    }
+
     private function decorateDevice(array $row): array
     {
         return [

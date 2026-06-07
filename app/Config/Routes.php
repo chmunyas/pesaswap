@@ -56,12 +56,14 @@ $routes->group('api', static function ($routes) {
     $routes->post('dinner-tables', 'Api\DinnerTablesController::create');
     $routes->delete('dinner-tables/(:num)', 'Api\DinnerTablesController::delete/$1');
     $routes->put('dinner-tables/(:num)/status', 'Api\DinnerTablesController::updateStatus/$1');
+    $routes->post('dinner-tables/bulk', 'Api\DinnerTablesController::bulkImport');
 
     $routes->get('items', 'Api\ItemsController::index');
     $routes->get('items/(:num)', 'Api\ItemsController::show/$1');
     $routes->post('items', 'Api\ItemsController::create');
     $routes->put('items/(:num)', 'Api\ItemsController::update/$1');
     $routes->delete('items/(:num)', 'Api\ItemsController::delete/$1');
+    $routes->post('items/bulk', 'Api\ItemsController::bulkImport');
 
     $routes->get('sales', 'Api\SalesController::index');
     $routes->get('sales/(:num)', 'Api\SalesController::show/$1');
@@ -72,12 +74,14 @@ $routes->group('api', static function ($routes) {
     $routes->post('customers', 'Api\CustomersController::create');
     $routes->put('customers/(:num)', 'Api\CustomersController::update/$1');
     $routes->delete('customers/(:num)', 'Api\CustomersController::delete/$1');
+    $routes->post('customers/bulk', 'Api\CustomersController::bulkImport');
 
     $routes->get('suppliers', 'Api\SuppliersController::index');
     $routes->get('suppliers/(:num)', 'Api\SuppliersController::show/$1');
     $routes->post('suppliers', 'Api\SuppliersController::create');
     $routes->put('suppliers/(:num)', 'Api\SuppliersController::update/$1');
     $routes->delete('suppliers/(:num)', 'Api\SuppliersController::delete/$1');
+    $routes->post('suppliers/bulk', 'Api\SuppliersController::bulkImport');
 
     $routes->get('receivings', 'Api\ReceivingsController::index');
     $routes->get('receivings/(:num)', 'Api\ReceivingsController::show/$1');
@@ -88,6 +92,7 @@ $routes->group('api', static function ($routes) {
     $routes->post('giftcards', 'Api\GiftcardsController::create');
     $routes->put('giftcards/(:num)', 'Api\GiftcardsController::update/$1');
     $routes->delete('giftcards/(:num)', 'Api\GiftcardsController::delete/$1');
+    $routes->post('giftcards/bulk-issue', 'Api\GiftcardsController::bulkIssue');
     $routes->get('giftcards/(:num)/history', 'Api\GiftcardsController::history/$1');
     $routes->post('giftcards/(:num)/redeem', 'Api\GiftcardsController::redeem/$1');
     $routes->post('giftcards/(:num)/refund', 'Api\GiftcardsController::refund/$1');
@@ -129,6 +134,7 @@ $routes->group('api', static function ($routes) {
     $routes->get('expenses', 'Api\ExpensesController::index');
     $routes->post('expenses', 'Api\ExpensesController::create');
     $routes->delete('expenses/(:num)', 'Api\ExpensesController::delete/$1');
+    $routes->post('expenses/bulk', 'Api\ExpensesController::bulkImport');
 
     $routes->get('cashups', 'Api\CashupsController::index');
     $routes->get('cashups/(:num)', 'Api\CashupsController::show/$1');
@@ -146,6 +152,7 @@ $routes->group('api', static function ($routes) {
     $routes->post('item-kits', 'Api\ItemKitsController::create');
     $routes->put('item-kits/(:num)', 'Api\ItemKitsController::update/$1');
     $routes->delete('item-kits/(:num)', 'Api\ItemKitsController::delete/$1');
+    $routes->post('item-kits/bulk', 'Api\ItemKitsController::bulkImport');
 
     $routes->get('messages', 'Api\MessagesController::index');
 
@@ -157,6 +164,7 @@ $routes->group('api', static function ($routes) {
     $routes->post('ticket-products', 'Api\TicketsController::productCreate');
     $routes->put('ticket-products/(:num)', 'Api\TicketsController::productUpdate/$1');
     $routes->delete('ticket-products/(:num)', 'Api\TicketsController::productDelete/$1');
+    $routes->post('ticket-products/bulk', 'Api\TicketsController::productBulkCreate');
 
     $routes->get('tickets', 'Api\TicketsController::ticketIndex');
     $routes->get('tickets/(:num)', 'Api\TicketsController::ticketShow/$1');
@@ -206,6 +214,7 @@ $routes->group('api', static function ($routes) {
     $routes->get('ticket-promos', 'Api\TicketsController::promoIndex');
     $routes->post('ticket-promos', 'Api\TicketsController::promoCreate');
     $routes->put('ticket-promos/(:num)', 'Api\TicketsController::promoUpdate/$1');
+    $routes->post('ticket-promos/bulk', 'Api\TicketsController::promoBulkCreate');
     $routes->delete('ticket-promos/(:num)', 'Api\TicketsController::promoDelete/$1');
     $routes->post('ticket-promos/validate', 'Api\TicketsController::promoValidate');
     $routes->get('ticket-products/(:num)/bundles', 'Api\TicketsController::bundleIndex/$1');

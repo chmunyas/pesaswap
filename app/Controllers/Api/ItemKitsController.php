@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Api;
 
+use App\Libraries\BulkImportLib;
 use CodeIgniter\HTTP\ResponseInterface;
 use Throwable;
 
@@ -545,5 +546,84 @@ class ItemKitsController extends BaseApiController
     private function likeValue(string $value): string
     {
         return '%' . $this->db->escapeLikeString($value) . '%';
+    }
+
+    /**
+     * POST /api/item-kits/bulk — batched item-kit creation.
+     *
+     * Each row: { name, description?, kit_discount?, kit_discount_type?,
+     *             items: [{ item_id, quantity, sequence? }] }
+     *
+     * Items in the kit must already exist (look up by item_id). Kits
+     * with the same name are SKIPPED — kit-name conflicts surface
+     * loudly so the operator can rename or remove the old kit first.
+     */
+    public function bulkImport(): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) return $authResponse;
+        if (!$this->db->tableExists('item_kits')) return $this->respondError('Item kits table missing.', 503);
+
+        $body = $this->request->getJSON(true) ?? [];
+        $employeeId = (int)($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+
+        $handler = function (array $row, int $idx, $db) {
+            $dryRun = !empty($row['__dry_run']);
+            $name = trim((string)($row['name'] ?? ''));
+            if ($name === '') {
+                return ['status' => 'failed', 'key' => '', 'message' => 'name is required'];
+            }
+            $items = is_array($row['items'] ?? null) ? $row['items'] : [];
+            if (empty($items)) {
+                return ['status' => 'failed', 'key' => $name, 'message' => 'items[] required'];
+            }
+            // Validate all item_ids exist.
+            $ids = array_filter(array_map(fn($l) => (int)($l['item_id'] ?? 0), $items));
+            if (empty($ids)) {
+                return ['status' => 'failed', 'key' => $name, 'message' => 'no valid item_ids in items[]'];
+            }
+            $found = $db->table('items')->whereIn('item_id', $ids)->where('deleted', 0)->countAllResults();
+            if ($found !== count(array_unique($ids))) {
+                return ['status' => 'failed', 'key' => $name, 'message' => 'one or more item_ids do not exist'];
+            }
+
+            // Dedupe on name.
+            $dup = $db->table('item_kits')->where('name', $name)->countAllResults();
+            if ($dup > 0) {
+                return ['status' => 'skipped', 'key' => $name, 'reason' => 'kit with this name already exists'];
+            }
+
+            if ($dryRun) {
+                return ['status' => 'imported', 'key' => $name, 'reason' => 'would insert'];
+            }
+
+            $db->table('item_kits')->insert([
+                'name'              => mb_substr($name, 0, 255),
+                'description'       => mb_substr((string)($row['description'] ?? ''), 0, 4096),
+                'kit_discount'      => (float)($row['kit_discount'] ?? 0),
+                'kit_discount_type' => (int)($row['kit_discount_type'] ?? 0),
+            ]);
+            $kitId = (int)$db->insertID();
+            $seq = 0;
+            foreach ($items as $line) {
+                $db->table('item_kit_items')->insert([
+                    'item_kit_id' => $kitId,
+                    'item_id'     => (int)$line['item_id'],
+                    'quantity'    => (float)($line['quantity'] ?? 1),
+                    'sequence'    => isset($line['sequence']) ? (int)$line['sequence'] : $seq++,
+                ]);
+            }
+            return ['status' => 'imported', 'key' => $name, 'reason' => 'inserted', 'message' => "kit_id={$kitId}"];
+        };
+
+        $result = BulkImportLib::run(
+            $this->db, 'item_kits', $body, $employeeId,
+            (string)($this->request->getIPAddress() ?: ''),
+            (string)$this->request->getUserAgent(),
+            $handler,
+        );
+        if (isset($result['error'])) {
+            return $this->respondError((string)$result['error'], (int)($result['http'] ?? 422));
+        }
+        return $this->respondSuccess($result, 'Bulk import complete.');
     }
 }

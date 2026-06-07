@@ -2,6 +2,7 @@
 
 namespace App\Controllers\Api;
 
+use App\Libraries\BulkImportLib;
 use CodeIgniter\HTTP\ResponseInterface;
 use Throwable;
 
@@ -271,5 +272,105 @@ class SuppliersController extends BaseApiController
         } catch (Throwable $e) {
             return $this->respondError('Error deleting supplier: ' . $e->getMessage(), 500);
         }
+    }
+
+    /**
+     * POST /api/suppliers/bulk — batched upsert keyed on company_name
+     * (case-insensitive, on the active set). Soft-deleted suppliers
+     * are NOT touched — a deleted supplier can be re-added with the
+     * same name.
+     */
+    public function bulkImport(): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) return $authResponse;
+        $body = $this->request->getJSON(true) ?? [];
+        $employeeId = (int)($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+
+        $handler = function (array $row, int $idx, $db) {
+            $dryRun = !empty($row['__dry_run']);
+            $company = trim((string)($row['company_name'] ?? ''));
+            if ($company === '') {
+                return ['status' => 'failed', 'key' => '', 'message' => 'company_name is required'];
+            }
+            $email = trim((string)($row['email'] ?? ''));
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                return ['status' => 'failed', 'key' => $company, 'message' => 'invalid email'];
+            }
+
+            $peopleTable = $db->prefixTable('people');
+            $suppliersTable = $db->prefixTable('suppliers');
+
+            // Idempotency: existing active supplier with same name → UPDATE.
+            $existing = $db->table('suppliers AS s')
+                ->select('s.person_id')
+                ->where('LOWER(s.company_name)', strtolower($company))
+                ->where('s.deleted', 0)
+                ->limit(1)
+                ->get()
+                ->getRowArray();
+
+            $personFields = [
+                trim((string)($row['first_name'] ?? '')),
+                trim((string)($row['last_name'] ?? '')),
+                $email,
+                trim((string)($row['phone_number'] ?? '')),
+                trim((string)($row['address_1'] ?? '')),
+                trim((string)($row['address_2'] ?? '')),
+                trim((string)($row['city'] ?? '')),
+                trim((string)($row['state'] ?? '')),
+                trim((string)($row['zip'] ?? '')),
+                trim((string)($row['country'] ?? '')),
+                trim((string)($row['comments'] ?? '')),
+            ];
+
+            if ($dryRun) {
+                return ['status' => 'imported', 'key' => $company, 'reason' => $existing ? 'would update' : 'would insert'];
+            }
+
+            if ($existing !== null) {
+                $personId = (int)$existing['person_id'];
+                $db->query(
+                    "UPDATE {$peopleTable} SET first_name=?, last_name=?, email=?, phone_number=?, address_1=?, address_2=?, city=?, state=?, zip=?, country=?, comments=? WHERE person_id=?",
+                    array_merge($personFields, [$personId]),
+                );
+                $db->query(
+                    "UPDATE {$suppliersTable} SET company_name=?, agency_name=?, account_number=? WHERE person_id=?",
+                    [
+                        $company,
+                        trim((string)($row['agency_name'] ?? '')),
+                        trim((string)($row['account_number'] ?? '')),
+                        $personId,
+                    ],
+                );
+                return ['status' => 'imported', 'key' => $company, 'reason' => 'updated'];
+            }
+
+            $db->query(
+                "INSERT INTO {$peopleTable} (first_name, last_name, email, phone_number, address_1, address_2, city, state, zip, country, comments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                $personFields,
+            );
+            $personId = (int)$db->insertID();
+            $db->query(
+                "INSERT INTO {$suppliersTable} (person_id, company_name, agency_name, account_number, deleted) VALUES (?, ?, ?, ?, 0)",
+                [
+                    $personId,
+                    $company,
+                    trim((string)($row['agency_name'] ?? '')),
+                    trim((string)($row['account_number'] ?? '')),
+                ],
+            );
+            return ['status' => 'imported', 'key' => $company, 'reason' => 'inserted'];
+        };
+
+        $result = BulkImportLib::run(
+            $this->db, 'suppliers', $body, $employeeId,
+            (string)($this->request->getIPAddress() ?: ''),
+            (string)$this->request->getUserAgent(),
+            $handler,
+        );
+        if (isset($result['error'])) {
+            return $this->respondError((string)$result['error'], (int)($result['http'] ?? 422));
+        }
+        return $this->respondSuccess($result, 'Bulk import complete.');
     }
 }
