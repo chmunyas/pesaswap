@@ -141,8 +141,8 @@ Each PNG is a single-page walk-through with step-by-step instructions, embedded 
   <tr>
     <td align="center" width="25%"><a href="docs/use-cases/13-gift-drop.png"><img src="docs/use-cases/13-gift-drop.png" alt="Use case 13 — Gift Drop (hongbao)" width="100%"></a><br><sub><b>13. Gift Drop (hongbao)</b> ✨ — one card → one share link → N slices for the first N to claim (equal or random)</sub></td>
     <td align="center" width="25%"><a href="docs/use-cases/14-lifecycle-nudges.png"><img src="docs/use-cases/14-lifecycle-nudges.png" alt="Use case 14 — Lifecycle nudges" width="100%"></a><br><sub><b>14. Lifecycle nudges</b> ✨ — <code>php spark giftcards:nudge</code> expiry + idle SMS reminders + receipt re-gift QR</sub></td>
-    <td align="center" width="25%"><a href="docs/use-cases/15-back-office.png"><img src="docs/use-cases/15-back-office.png" alt="Use case 15 — Back-office completeness" width="100%"></a><br><sub><b>15. Back-office</b> ✨ <em>new</em> — Receivings entry, Suppliers CRUD, Reports, Office, Gate Scanner, Ticket Promos edit, immutability decisions</sub></td>
-    <td></td>
+    <td align="center" width="25%"><a href="docs/use-cases/15-back-office.png"><img src="docs/use-cases/15-back-office.png" alt="Use case 15 — Back-office completeness" width="100%"></a><br><sub><b>15. Back-office</b> ✨ — Receivings entry, Suppliers CRUD, Reports, Office, Gate Scanner, Ticket Promos edit, immutability decisions</sub></td>
+    <td align="center" width="25%"><a href="docs/use-cases/16-bulk-imports.png"><img src="docs/use-cases/16-bulk-imports.png" alt="Use case 16 — Bulk imports" width="100%"></a><br><sub><b>16. Bulk imports</b> ✨ <em>new</em> — 9 entities, single envelope, dry-run + skip-on-error, audit trail</sub></td>
   </tr>
 </table>
 
