@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Crown, Mail, MapPin, Pencil, Phone, Plus, Search, Trash2, TrendingUp } from 'lucide-react';
+import { Crown, Mail, MapPin, Pencil, Phone, Plus, Search, Trash2, TrendingUp, Upload } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { showToast } from '../components/ui/Toast';
+import { BulkImportModal } from '../components/bulk/BulkImportModal';
+import { BULK_SCHEMAS } from '../components/bulk/schemas';
 import { api } from '../lib/api';
 import { formatCurrency } from '../lib/utils';
 import { getTier, getTierClasses, getProgressToNextTier } from '../lib/loyalty';
@@ -100,6 +102,7 @@ export function CustomersPage() {
   const [customerToDelete, setCustomerToDelete] = useState<CustomerRecord | null>(null);
   const [form, setForm] = useState<CustomerFormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   const loadCustomers = async () => {
     try {
@@ -235,10 +238,16 @@ export function CustomersPage() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Customers</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">{customers.length} registered customers {usingMockData ? '(mock data)' : ''}</p>
         </div>
-        <button type="button" onClick={openCreateModal} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-600 transition shadow-sm">
-          <Plus className="h-4 w-4" />
-          Add Customer
-        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setShowBulkImport(true)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+            <Upload className="h-4 w-4" />
+            Import CSV
+          </button>
+          <button type="button" onClick={openCreateModal} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-600 transition shadow-sm">
+            <Plus className="h-4 w-4" />
+            Add Customer
+          </button>
+        </div>
       </div>
 
       <div className="relative rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
@@ -380,6 +389,13 @@ export function CustomersPage() {
           </div>
         </div>
       </Modal>
+
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        {...BULK_SCHEMAS.customers}
+        onDone={async () => { await loadCustomers(); }}
+      />
     </div>
   );
 }

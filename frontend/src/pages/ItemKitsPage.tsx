@@ -22,12 +22,15 @@ import {
   Search,
   Tag,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatCurrency } from '../lib/utils';
 import { Modal } from '../components/ui/Modal';
 import { showToast } from '../components/ui/Toast';
+import { BulkImportModal } from '../components/bulk/BulkImportModal';
+import { BULK_SCHEMAS } from '../components/bulk/schemas';
 import type { Item } from '../types';
 
 type DiscountType = 0 | 1;       // 0 = PERCENT, 1 = FIXED
@@ -155,6 +158,7 @@ export function ItemKitsPage() {
   const [saving, setSaving] = useState(false);
 
   const [deleting, setDeleting] = useState<ItemKit | null>(null);
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   async function loadKits() {
     setLoading(true);
@@ -290,14 +294,24 @@ export function ItemKitsPage() {
             {usingMock && <span className="ml-2 text-amber-600 dark:text-amber-400">(demo data — API unreachable)</span>}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600"
-        >
-          <Plus className="h-4 w-4" />
-          Create Kit
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowBulkImport(true)}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+          >
+            <Upload className="h-4 w-4" />
+            Import CSV
+          </button>
+          <button
+            type="button"
+            onClick={openCreate}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600"
+          >
+            <Plus className="h-4 w-4" />
+            Create Kit
+          </button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
@@ -771,6 +785,13 @@ function ItemPicker({ selected, onChange }: ItemPickerProps) {
           ))}
         </div>
       )}
+
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        {...BULK_SCHEMAS.itemKits}
+        onDone={async () => { await loadKits(); }}
+      />
     </div>
   );
 }

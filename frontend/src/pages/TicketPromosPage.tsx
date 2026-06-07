@@ -7,10 +7,12 @@
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { Pencil, Plus, Tag, Trash2 } from 'lucide-react';
+import { Pencil, Plus, Tag, Trash2, Upload } from 'lucide-react';
 import { api } from '../lib/api';
 import { Modal } from '../components/ui/Modal';
 import { showToast } from '../components/ui/Toast';
+import { BulkImportModal } from '../components/bulk/BulkImportModal';
+import { BULK_SCHEMAS } from '../components/bulk/schemas';
 
 interface Promo {
   code_id: number;
@@ -32,6 +34,7 @@ export function TicketPromosPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<Promo | null>(null);
+  const [showBulkImport, setShowBulkImport] = useState(false);
   const [validateCode, setValidateCode] = useState('');
   const [validateAmount, setValidateAmount] = useState('100.00');
   const [validateResult, setValidateResult] = useState<unknown>(null);
@@ -77,9 +80,14 @@ export function TicketPromosPage() {
           <Tag className="h-6 w-6 text-fuchsia-600" />
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Promo Codes</h1>
         </div>
-        <button type="button" onClick={() => setShowCreate(true)} className="inline-flex items-center gap-1 rounded-lg bg-fuchsia-600 px-3 py-2 text-sm font-bold text-white hover:bg-fuchsia-700">
-          <Plus className="h-4 w-4" /> New promo
-        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setShowBulkImport(true)} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-bold text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+            <Upload className="h-4 w-4" /> Bulk
+          </button>
+          <button type="button" onClick={() => setShowCreate(true)} className="inline-flex items-center gap-1 rounded-lg bg-fuchsia-600 px-3 py-2 text-sm font-bold text-white hover:bg-fuchsia-700">
+            <Plus className="h-4 w-4" /> New promo
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -153,6 +161,13 @@ export function TicketPromosPage() {
 
       <PromoCreateModal isOpen={showCreate} onClose={() => setShowCreate(false)} onSaved={async () => { setShowCreate(false); await load(); }} />
       <PromoCreateModal isOpen={editing !== null} editing={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await load(); }} />
+
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        {...BULK_SCHEMAS.ticketPromos}
+        onDone={async () => { await load(); }}
+      />
     </div>
   );
 }

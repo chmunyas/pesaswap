@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Paperclip, Plus, Search, Trash2, Wallet } from 'lucide-react';
+import { Paperclip, Plus, Search, Trash2, Upload, Wallet } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { showToast } from '../components/ui/Toast';
+import { BulkImportModal } from '../components/bulk/BulkImportModal';
+import { BULK_SCHEMAS } from '../components/bulk/schemas';
 import { api } from '../lib/api';
 import { formatCurrency, formatDate } from '../lib/utils';
 
@@ -70,6 +72,7 @@ export function ExpensesPage() {
   const [expenseToDelete, setExpenseToDelete] = useState<ExpenseRecord | null>(null);
   const [form, setForm] = useState<ExpenseFormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   const loadExpenses = async () => {
     try {
@@ -184,10 +187,16 @@ export function ExpensesPage() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Expenses</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Capture store costs and keep monthly spend visible to managers.</p>
         </div>
-        <button type="button" onClick={() => setIsModalOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600">
-          <Plus className="h-4 w-4" />
-          Add Expense
-        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setShowBulkImport(true)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+            <Upload className="h-4 w-4" />
+            Import CSV
+          </button>
+          <button type="button" onClick={() => setIsModalOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600">
+            <Plus className="h-4 w-4" />
+            Add Expense
+          </button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-gradient-to-r from-blue-500 to-indigo-500 p-5 text-white shadow-sm">
@@ -311,6 +320,13 @@ export function ExpensesPage() {
           </div>
         </div>
       </Modal>
+
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        {...BULK_SCHEMAS.expenses}
+        onDone={async () => { await loadExpenses(); }}
+      />
     </div>
   );
 }

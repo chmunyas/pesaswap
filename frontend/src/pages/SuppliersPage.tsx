@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Building2, Mail, MapPin, Pencil, Phone, Plus, Search, Trash2, User } from 'lucide-react';
+import { Building2, Mail, MapPin, Pencil, Phone, Plus, Search, Trash2, Upload, User } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { showToast } from '../components/ui/Toast';
+import { BulkImportModal } from '../components/bulk/BulkImportModal';
+import { BULK_SCHEMAS } from '../components/bulk/schemas';
 import { api } from '../lib/api';
 
 interface SupplierRecord {
@@ -99,6 +101,7 @@ export function SuppliersPage() {
   const [supplierToDelete, setSupplierToDelete] = useState<SupplierRecord | null>(null);
   const [form, setForm] = useState<SupplierFormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   const loadSuppliers = async () => {
     try {
@@ -245,10 +248,16 @@ export function SuppliersPage() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Suppliers</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Manage purchasing partners and primary supplier contacts.</p>
         </div>
-        <button type="button" onClick={openCreateModal} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600">
-          <Plus className="h-4 w-4" />
-          Add Supplier
-        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setShowBulkImport(true)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+            <Upload className="h-4 w-4" />
+            Import CSV
+          </button>
+          <button type="button" onClick={openCreateModal} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600">
+            <Plus className="h-4 w-4" />
+            Add Supplier
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.5fr_repeat(2,minmax(0,1fr))]">
@@ -371,6 +380,13 @@ export function SuppliersPage() {
           </div>
         </div>
       </Modal>
+
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        {...BULK_SCHEMAS.suppliers}
+        onDone={async () => { await loadSuppliers(); }}
+      />
     </div>
   );
 }

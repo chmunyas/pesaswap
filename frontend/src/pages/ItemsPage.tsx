@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Package, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { Package, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 import { showToast } from '../components/ui/Toast';
+import { BulkImportModal } from '../components/bulk/BulkImportModal';
+import { BULK_SCHEMAS } from '../components/bulk/schemas';
 import { api } from '../lib/api';
 import { formatCurrency } from '../lib/utils';
 
@@ -86,6 +88,7 @@ export function ItemsPage() {
   const [form, setForm] = useState<ItemFormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [usingMockData, setUsingMockData] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   const loadItems = async () => {
     try {
@@ -223,14 +226,24 @@ export function ItemsPage() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Items</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Manage your catalog, pricing, and stock quantities from one place.</p>
         </div>
-        <button
-          type="button"
-          onClick={openCreateModal}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600"
-        >
-          <Plus className="h-4 w-4" />
-          Add Item
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowBulkImport(true)}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+          >
+            <Upload className="h-4 w-4" />
+            Import CSV
+          </button>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600"
+          >
+            <Plus className="h-4 w-4" />
+            Add Item
+          </button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
@@ -371,6 +384,13 @@ export function ItemsPage() {
           </div>
         </div>
       </Modal>
+
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        {...BULK_SCHEMAS.items}
+        onDone={async () => { await loadItems(); }}
+      />
     </div>
   );
 }

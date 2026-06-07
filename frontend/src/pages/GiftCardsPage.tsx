@@ -50,6 +50,7 @@ import {
   TrendingDown,
   TrendingUp,
   Trophy,
+  Upload,
   UserPlus,
   Wallet,
   Wand2,
@@ -65,6 +66,8 @@ import { showToast } from '../components/ui/Toast';
 import { playNotificationSound } from '../lib/realtime';
 import { BindModal } from '../components/giftcard/BindModal';
 import { DropCreateModal } from '../components/giftcard/DropCreateModal';
+import { BulkImportModal } from '../components/bulk/BulkImportModal';
+import { BULK_SCHEMAS } from '../components/bulk/schemas';
 import { giftcardBindingMock, type CardBinding } from '../lib/giftcard-bindings';
 
 type Status = 'active' | 'used' | 'expired' | 'disabled';
@@ -366,6 +369,7 @@ export function GiftCardsPage() {
   const [transferTarget, setTransferTarget] = useState<GiftCard | null>(null);
   const [bindTarget, setBindTarget] = useState<{ card: GiftCard; prefillPhone?: string | null } | null>(null);
   const [dropTarget, setDropTarget] = useState<GiftCard | null>(null);
+  const [showBulkImport, setShowBulkImport] = useState(false);
   // Track NFC binding state per card code (client-side mock).
   const [bindings, setBindings] = useState<Record<string, CardBinding>>({});
 
@@ -562,14 +566,24 @@ export function GiftCardsPage() {
             </a>
           </nav>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowCreate(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600"
-        >
-          <Plus className="h-4 w-4" />
-          Send a gift
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowBulkImport(true)}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+          >
+            <Upload className="h-4 w-4" />
+            Bulk issue
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-600"
+          >
+            <Plus className="h-4 w-4" />
+            Send a gift
+          </button>
+        </div>
       </div>
 
       {/* Stats strip */}
@@ -963,6 +977,14 @@ export function GiftCardsPage() {
           }}
         />
       )}
+
+      {/* Bulk-issue modal (Slice F) */}
+      <BulkImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        {...BULK_SCHEMAS.giftcards}
+        onDone={async () => { await load(); showToast('Gift cards minted'); }}
+      />
 
       {/* Delete modal */}
       <Modal isOpen={deleting !== null} onClose={() => setDeleting(null)} title="Disable gift card" size="sm">
