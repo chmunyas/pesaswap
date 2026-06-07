@@ -175,4 +175,130 @@ class ReceivingsController extends BaseApiController
             return $this->respondError('Failed to load receiving.', 500);
         }
     }
+
+    /**
+     * Create a goods-received entry plus its line items in one atomic
+     * transaction. Updates each item's `quantity` in `ospos_items` so
+     * stock-on-hand stays in sync (the legacy OSPOS receivings flow
+     * does the same).
+     *
+     * POST /api/receivings
+     *   {
+     *     supplier_id?: int,           # optional walk-in supplier
+     *     payment_type?: string,
+     *     reference?: string,
+     *     comment?: string,
+     *     items: [
+     *       { item_id, quantity, cost_price, unit_price?, description?, serialnumber?, discount?, discount_type? }
+     *     ]
+     *   }
+     *
+     * Returns { receiving_id, line_count, total_cost }.
+     */
+    public function create(): ResponseInterface
+    {
+        if ($authResponse = $this->requireAuth()) {
+            return $authResponse;
+        }
+        if (!$this->db->tableExists('receivings') || !$this->db->tableExists('receivings_items')) {
+            return $this->respondError('Receivings tables are not available.', 503);
+        }
+
+        $body = $this->request->getJSON(true) ?? [];
+        $items = is_array($body['items'] ?? null) ? $body['items'] : [];
+        if (count($items) === 0) {
+            return $this->respondError('At least one line item is required.', 422);
+        }
+
+        // Pre-validate each line so we never get a half-written receipt.
+        foreach ($items as $i => $line) {
+            if (!isset($line['item_id']) || (int) $line['item_id'] <= 0) {
+                return $this->respondError("items[$i].item_id is required (positive int).", 422);
+            }
+            if (!isset($line['quantity']) || (float) $line['quantity'] <= 0) {
+                return $this->respondError("items[$i].quantity must be > 0.", 422);
+            }
+            if (!isset($line['cost_price']) || (float) $line['cost_price'] < 0) {
+                return $this->respondError("items[$i].cost_price must be >= 0.", 422);
+            }
+        }
+
+        try {
+            $this->db->transStart();
+
+            $employeeId = (int) ($this->employee->get_logged_in_employee_info()->person_id ?? 0);
+            $totalCost = 0.0;
+            $supplierId = isset($body['supplier_id']) ? (int) $body['supplier_id'] : null;
+
+            $this->db->table('receivings')->insert([
+                'receiving_time' => date('Y-m-d H:i:s'),
+                'supplier_id'    => $supplierId,
+                'employee_id'    => $employeeId,
+                'comment'        => mb_substr((string) ($body['comment'] ?? ''), 0, 8192),
+                'payment_type'   => mb_substr((string) ($body['payment_type'] ?? ''), 0, 20),
+                'reference'      => mb_substr((string) ($body['reference'] ?? ''), 0, 32),
+            ]);
+            $receivingId = (int) $this->db->insertID();
+
+            $line = 1;
+            foreach ($items as $row) {
+                $itemId = (int) $row['item_id'];
+                $qty = (float) $row['quantity'];
+                $cost = (float) $row['cost_price'];
+                $unit = isset($row['unit_price']) ? (float) $row['unit_price'] : $cost;
+                $totalCost += $qty * $cost;
+
+                $this->db->table('receivings_items')->insert([
+                    'receiving_id'        => $receivingId,
+                    'item_id'             => $itemId,
+                    'line'                => $line++,
+                    'description'         => mb_substr((string) ($row['description'] ?? ''), 0, 30),
+                    'serialnumber'        => mb_substr((string) ($row['serialnumber'] ?? ''), 0, 30),
+                    'quantity_purchased'  => number_format($qty, 3, '.', ''),
+                    'item_cost_price'     => number_format($cost, 2, '.', ''),
+                    'item_unit_price'     => number_format($unit, 2, '.', ''),
+                    'discount'            => number_format((float) ($row['discount'] ?? 0), 2, '.', ''),
+                    'discount_type'       => (int) ($row['discount_type'] ?? 0),
+                    'item_location'       => (int) ($row['item_location'] ?? 0),
+                    'receiving_quantity'  => number_format($qty, 3, '.', ''),
+                ]);
+
+                // Adjust on-hand stock (matches legacy receivings behaviour).
+                if ($this->db->tableExists('item_quantities')) {
+                    $loc = (int) ($row['item_location'] ?? 0);
+                    $existing = $this->db->table('item_quantities')
+                        ->where('item_id', $itemId)
+                        ->where('location_id', $loc ?: 1)
+                        ->get()
+                        ->getRowArray();
+                    if ($existing !== null) {
+                        $this->db->table('item_quantities')
+                            ->where('item_id', $itemId)
+                            ->where('location_id', $loc ?: 1)
+                            ->update(['quantity' => (float) $existing['quantity'] + $qty]);
+                    } else {
+                        $this->db->table('item_quantities')->insert([
+                            'item_id'     => $itemId,
+                            'location_id' => $loc ?: 1,
+                            'quantity'    => number_format($qty, 3, '.', ''),
+                        ]);
+                    }
+                }
+            }
+
+            $this->db->transComplete();
+            if (!$this->db->transStatus()) {
+                return $this->respondError('Failed to record receipt.', 500);
+            }
+
+            return $this->respondSuccess([
+                'receiving_id' => $receivingId,
+                'line_count'   => count($items),
+                'total_cost'   => $totalCost,
+            ], 'Receiving recorded.', 201);
+        } catch (Throwable $e) {
+            log_message('error', 'ReceivingsController::create — ' . $e->getMessage());
+            return $this->respondError('Failed to record receipt.', 500);
+        }
+    }
 }

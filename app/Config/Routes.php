@@ -53,6 +53,8 @@ $routes->group('api', static function ($routes) {
     $routes->get('dashboard/stats', 'Api\DashboardController::stats');
 
     $routes->get('dinner-tables', 'Api\DinnerTablesController::index');
+    $routes->post('dinner-tables', 'Api\DinnerTablesController::create');
+    $routes->delete('dinner-tables/(:num)', 'Api\DinnerTablesController::delete/$1');
     $routes->put('dinner-tables/(:num)/status', 'Api\DinnerTablesController::updateStatus/$1');
 
     $routes->get('items', 'Api\ItemsController::index');
@@ -79,6 +81,7 @@ $routes->group('api', static function ($routes) {
 
     $routes->get('receivings', 'Api\ReceivingsController::index');
     $routes->get('receivings/(:num)', 'Api\ReceivingsController::show/$1');
+    $routes->post('receivings', 'Api\ReceivingsController::create');
 
     $routes->get('giftcards', 'Api\GiftcardsController::index');
     $routes->get('giftcards/(:num)', 'Api\GiftcardsController::show/$1');

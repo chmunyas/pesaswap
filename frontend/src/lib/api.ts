@@ -211,11 +211,22 @@ export const api = {
   },
   receivings: {
     list: () => request<ApiResponse<{ receivings?: EntityList }>>('/receivings'),
+    create: (data: ApiData) =>
+      request<ApiResponse<EntityPayload>>('/receivings', { method: 'POST', body: JSON.stringify(data) }),
   },
   giftcards: giftCardEndpoints,
   giftCards: giftCardEndpoints,
   messages: {
     list: () => request<ApiResponse<{ messages?: EntityList }>>('/messages'),
+  },
+  dinnerTables: {
+    list: () => request<ApiResponse<EntityList>>('/dinner-tables'),
+    create: (data: ApiData) =>
+      request<ApiResponse<EntityPayload>>('/dinner-tables', { method: 'POST', body: JSON.stringify(data) }),
+    delete: (id: number) =>
+      request<ApiResponse<EntityPayload>>(`/dinner-tables/${id}`, { method: 'DELETE' }),
+    updateStatus: (id: number, status: number) =>
+      request<ApiResponse<EntityPayload>>(`/dinner-tables/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
   },
   expenses: expenseEndpoints,
   cashups: {

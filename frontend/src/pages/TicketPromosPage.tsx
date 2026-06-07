@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { Plus, Tag, Trash2 } from 'lucide-react';
+import { Pencil, Plus, Tag, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Modal } from '../components/ui/Modal';
 import { showToast } from '../components/ui/Toast';
@@ -31,6 +31,7 @@ export function TicketPromosPage() {
   const [promos, setPromos] = useState<Promo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [editing, setEditing] = useState<Promo | null>(null);
   const [validateCode, setValidateCode] = useState('');
   const [validateAmount, setValidateAmount] = useState('100.00');
   const [validateResult, setValidateResult] = useState<unknown>(null);
@@ -121,9 +122,14 @@ export function TicketPromosPage() {
                   </td>
                   <td className="px-3 py-2 text-xs">{p.min_amount ?? '—'}</td>
                   <td className="px-3 py-2 text-right">
-                    <button type="button" onClick={() => handleDelete(p)} className="text-rose-700 hover:text-rose-800">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="inline-flex items-center gap-1">
+                      <button type="button" onClick={() => setEditing(p)} aria-label="Edit promo" className="text-gray-600 hover:text-gray-900 dark:text-gray-300">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => handleDelete(p)} aria-label="Delete promo" className="text-rose-700 hover:text-rose-800">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -146,11 +152,12 @@ export function TicketPromosPage() {
       </div>
 
       <PromoCreateModal isOpen={showCreate} onClose={() => setShowCreate(false)} onSaved={async () => { setShowCreate(false); await load(); }} />
+      <PromoCreateModal isOpen={editing !== null} editing={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await load(); }} />
     </div>
   );
 }
 
-function PromoCreateModal({ isOpen, onClose, onSaved }: { isOpen: boolean; onClose: () => void; onSaved: () => Promise<void> }) {
+function PromoCreateModal({ isOpen, editing, onClose, onSaved }: { isOpen: boolean; editing?: Promo | null; onClose: () => void; onSaved: () => Promise<void> }) {
   const [code, setCode] = useState('');
   const [description, setDescription] = useState('');
   const [pct, setPct] = useState('');
@@ -159,6 +166,23 @@ function PromoCreateModal({ isOpen, onClose, onSaved }: { isOpen: boolean; onClo
   const [expiresAt, setExpiresAt] = useState('');
   const [minAmount, setMinAmount] = useState('');
   const [saving, setSaving] = useState(false);
+  const isEdit = !!editing;
+
+  useEffect(() => {
+    if (editing) {
+      setCode(editing.code);
+      setDescription(editing.description ?? '');
+      setPct(editing.discount_pct ?? '');
+      setFlat(editing.discount_flat ?? '');
+      setMaxUses(editing.max_uses !== null ? String(editing.max_uses) : '');
+      // Convert "YYYY-MM-DD HH:mm:ss" → "YYYY-MM-DDTHH:mm" for the input.
+      setExpiresAt(editing.expires_at ? editing.expires_at.slice(0, 16).replace(' ', 'T') : '');
+      setMinAmount(editing.min_amount ?? '');
+    } else {
+      setCode(''); setDescription(''); setPct(''); setFlat('');
+      setMaxUses(''); setExpiresAt(''); setMinAmount('');
+    }
+  }, [editing, isOpen]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -170,9 +194,13 @@ function PromoCreateModal({ isOpen, onClose, onSaved }: { isOpen: boolean; onClo
       if (maxUses) payload.max_uses = Number(maxUses);
       if (expiresAt) payload.expires_at = expiresAt.replace('T', ' ') + ':00';
       if (minAmount) payload.min_amount = minAmount;
-      await api.tickets.promos.create(payload);
-      showToast('Promo created');
-      setCode(''); setDescription(''); setPct(''); setFlat(''); setMaxUses(''); setExpiresAt(''); setMinAmount('');
+      if (isEdit && editing) {
+        await api.tickets.promos.update(editing.code_id, payload);
+        showToast('Promo updated');
+      } else {
+        await api.tickets.promos.create(payload);
+        showToast('Promo created');
+      }
       await onSaved();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Save failed', 'error');
@@ -182,9 +210,9 @@ function PromoCreateModal({ isOpen, onClose, onSaved }: { isOpen: boolean; onClo
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="New promo code" size="md">
+    <Modal isOpen={isOpen} onClose={onClose} title={isEdit ? `Edit promo · ${editing?.code}` : 'New promo code'} size="md">
       <form onSubmit={handleSubmit} className="space-y-3">
-        <input required value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE (e.g. EARLYBIRD20)" pattern="^[A-Z0-9_-]{3,64}$" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-mono dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
+        <input required value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE (e.g. EARLYBIRD20)" pattern="^[A-Z0-9_-]{3,64}$" disabled={isEdit} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-mono dark:border-gray-700 dark:bg-gray-900 dark:text-white disabled:opacity-60" />
         <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
         <div className="grid gap-2 md:grid-cols-2">
           <input value={pct} onChange={(e) => setPct(e.target.value)} placeholder="% discount (1-100)" type="number" min="1" max="100" step="0.01" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white" />
@@ -197,7 +225,7 @@ function PromoCreateModal({ isOpen, onClose, onSaved }: { isOpen: boolean; onClo
         </div>
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm dark:border-gray-700 dark:text-gray-200">Cancel</button>
-          <button type="submit" disabled={saving} className="rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-700 disabled:opacity-60">{saving ? 'Saving…' : 'Create'}</button>
+          <button type="submit" disabled={saving} className="rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-700 disabled:opacity-60">{saving ? 'Saving…' : (isEdit ? 'Update' : 'Create')}</button>
         </div>
       </form>
     </Modal>

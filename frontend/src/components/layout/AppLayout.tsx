@@ -20,7 +20,6 @@ import {
   BarChart3,
   ClipboardList,
   CreditCard,
-  Mail,
   Receipt,
   Wallet,
   Settings,
@@ -56,7 +55,11 @@ const navItems = [
   { to: '/expenses', icon: Wallet, label: 'Expenses', group: 'office' },
   { to: '/cashups', icon: Wallet, label: 'Cashups', group: 'office' },
   { to: '/reports', icon: BarChart3, label: 'Reports', group: 'office' },
-  { to: '/messages', icon: Mail, label: 'Messages', group: 'office' },
+  // Messages page is hidden from nav for the pilot — the backend has no
+  // send/mark-read endpoints and no DB schema (gracefully returns empty).
+  // Route still mounted in App.tsx so the work isn't lost when we ship
+  // the full messaging schema later.
+  // { to: '/messages', icon: Mail, label: 'Messages', group: 'office' },
   { to: '/office', icon: Settings, label: 'Office', group: 'office' },
   { to: '/preview', icon: Smartphone, label: 'Mobile Preview', group: 'ai' },
   { to: '/ai', icon: MessageSquareText, label: 'AI Assistant', group: 'ai' },
